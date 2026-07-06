@@ -1,0 +1,71 @@
+name = "santrivora"
+main = "src/worker.ts"
+compatibility_date = "2024-04-01"
+workers_dev = true
+
+[build]
+command = ""
+
+# Production database (will be created)
+[[d1_databases]]
+binding = "DB"
+database_name = "santrivora-db"
+database_id = ""  # Fill after creation
+
+# Staging database
+[[d1_databases]]
+binding = "DB_STAGING"
+database_name = "santrivora-db-staging"
+database_id = ""
+
+# Development database
+[[d1_databases]]
+binding = "DB_DEV"
+database_name = "santrivora-db-dev"
+database_id = ""
+
+# KV for rate limiting & sessions
+[[kv_namespaces]]
+binding = "KV"
+id = ""  # Fill after creation
+
+# R2 for photo storage
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "santrivora-photos"
+
+# Environment variables
+[vars]
+ENVIRONMENT = "development"
+
+# Staging environment
+[env.staging]
+name = "santrivora-staging"
+vars = { ENVIRONMENT = "staging" }
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "santrivora-db-staging"
+database_id = ""
+
+[[env.staging.kv_namespaces]]
+binding = "KV"
+id = ""
+
+# Production environment
+[env.production]
+name = "santrivora-production"
+vars = { ENVIRONMENT = "production" }
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "santrivora-db"
+database_id = ""
+
+[[env.production.kv_namespaces]]
+binding = "KV"
+id = ""
+
+[env.production.r2_buckets]]
+binding = "R2"
+bucket_name = "santrivora-photos"

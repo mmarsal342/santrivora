@@ -1,0 +1,81 @@
+export interface Env {
+  // Required environment variables
+  JWT_ACCESS_SECRET: string
+  JWT_REFRESH_SECRET: string
+  ENVIRONMENT: 'development' | 'staging' | 'production'
+
+  // Bindings
+  DB: D1Database
+  DB_STAGING: D1Database
+  DB_DEV: D1Database
+  KV: KVNamespace
+  R2: R2Bucket
+
+  // Optional
+  SENTRY_DSN?: string
+  LOG_LEVEL?: 'debug' | 'info' | 'warn' | 'error'
+  ADMIN_EMAIL?: string
+  PESANTREN_NAME?: string
+}
+
+export interface UserPayload {
+  sub: string
+  email: string
+  role: 'admin' | 'ustadz'
+  kelas_ids: string[]
+  iat: number
+  exp: number
+  jti: string
+}
+
+export interface Santri {
+  id: string
+  nama_lengkap: string
+  jenis_kelamin: 'L' | 'P'
+  kelas_id: string | null
+  angkatan: string | null
+  tanggal_masuk: string | null
+  status: 'aktif' | 'lulus' | 'keluar'
+  foto_url: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface Kelas {
+  id: string
+  nama: string
+  tingkatan: string | null
+  tahun_ajaran: string | null
+  is_active: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CatatanDisiplin {
+  id: string
+  santri_id: string
+  tipe: 'pelanggaran' | 'prestasi'
+  kategori_id: string | null
+  judul: string
+  deskripsi: string | null
+  tanggal_kejadian: string
+  dicatat_oleh: string
+  tindak_lanjut: string | null
+  version: number
+  is_deleted: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ApiError {
+  error: string
+  code: string
+  message: string
+  requestId?: string
+  errors?: Array<{
+    field: string
+    message: string
+  }>
+  retryAfter?: number
+}

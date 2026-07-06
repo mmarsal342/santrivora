@@ -1,0 +1,46 @@
+{
+  "name": "santrivora",
+  "version": "1.0.0",
+  "description": "Sistem Manajemen Santri - Full Cloudflare (Workers + D1 + R2)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:staging": "wrangler dev --env staging",
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging",
+    "db:create": "wrangler d1 create santrivora-db",
+    "db:create:staging": "wrangler d1 create santrivora-db-staging",
+    "db:create:dev": "wrangler d1 create santrivora-db-dev",
+    "db:migrate": "wrangler d1 execute santrivora-db --file=./src/db/migrations/001_initial_schema.sql",
+    "db:migrate:staging": "wrangler d1 execute santrivora-db-staging --env staging --file=./src/db/migrations/001_initial_schema.sql",
+    "db:migrate:dev": "wrangler d1 execute santrivora-db-dev --env development --file=./src/db/migrations/001_initial_schema.sql",
+    "db:seed": "echo 'Seeding not implemented yet'",
+    "db:backup": "wrangler d1 backups create santrivora-db",
+    "db:backup:list": "wrangler d1 backups list santrivora-db",
+    "kv:create": "wrangler kv namespace create",
+    "r2:create": "wrangler r2 bucket create santrivora-photos"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mmarsal342/santrivora.git"
+  },
+  "keywords": ["cloudflare", "workers", "d1", "offline-first", "pesantren"],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mmarsal342/santrivora/issues"
+  },
+  "homepage": "https://github.com/mmarsal342/santrivora#readme",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@hono/zod-validator": "^0.8.0",
+    "@types/bcryptjs": "^2.4.6",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.107.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "hono": "^4.12.27",
+    "zod": "^4.4.3"
+  }
+}
