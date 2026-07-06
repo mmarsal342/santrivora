@@ -1,5 +1,13 @@
 import { Context, Next } from 'hono'
+import { cors } from 'hono/cors'
 import type { ApiError, Env } from '../types'
+
+const ALLOWED_ORIGINS = [
+  'https://santrivora.pages.dev',
+  'https://santrivora-production.patternvora-api.workers.dev',
+  'http://localhost:5173',
+  'http://localhost:8787'
+]
 
 export const securityHeadersMiddleware = () => {
   return async (c: Context<{ Bindings: Env }>, next: Next) => {
@@ -9,7 +17,7 @@ export const securityHeadersMiddleware = () => {
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
       "style-src 'self' 'unsafe-inline'; " +
       "img-src 'self' data: https:; " +
-      "connect-src 'self'; " +
+      "connect-src 'self' https://*.pages.dev https://*.workers.dev; " +
       "frame-ancestors 'none'; " +
       "form-action 'self'")
     c.header('X-XSS-Protection', '1; mode=block')
@@ -99,3 +107,5 @@ export const rateLimitMiddleware = () => {
     }
   }
 }
+
+export { cors, ALLOWED_ORIGINS }

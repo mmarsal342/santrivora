@@ -1,7 +1,6 @@
 import { Hono } from 'hono'
-import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
-import { errorHandler, rateLimitMiddleware, securityHeadersMiddleware } from './middleware'
+import { cors, errorHandler, rateLimitMiddleware, securityHeadersMiddleware, ALLOWED_ORIGINS } from './middleware'
 import { authRoutes } from './routes/auth'
 import { adminRoutes } from './routes/admin'
 import { kelasRoutes } from './routes/kelas'
@@ -14,9 +13,15 @@ import type { Env } from './types'
 
 const app = new Hono<{ Bindings: Env }>()
 
-// API routes FIRST — these take priority over static assets
 app.use('/api/*', securityHeadersMiddleware())
-app.use('/api/*', cors())
+app.use('/api/*', cors({
+  origin: ALLOWED_ORIGINS,
+  allowHeaders: ['Content-Type', 'Authorization'],
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  exposeHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
+  credentials: true,
+  maxAge: 86400
+}))
 app.use('/api/*', logger())
 app.use('/api/*', errorHandler())
 app.use('/api/*', rateLimitMiddleware())
