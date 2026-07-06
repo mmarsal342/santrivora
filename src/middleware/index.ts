@@ -1,13 +1,9 @@
-import { Next, Context } from 'hono'
-import type { ApiError } from '../types'
+import { Context, Next } from 'hono'
+import type { ApiError, Env } from '../types'
 
-// Security headers middleware
 export const securityHeadersMiddleware = () => {
-  return async (c: Context, next: Next) => {
-    // HSTS
+  return async (c: Context<{ Bindings: Env }>, next: Next) => {
     c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload')
-
-    // CSP
     c.header('Content-Security-Policy',
       "default-src 'self'; " +
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
@@ -16,33 +12,18 @@ export const securityHeadersMiddleware = () => {
       "connect-src 'self'; " +
       "frame-ancestors 'none'; " +
       "form-action 'self'")
-
-    // XSS Protection
     c.header('X-XSS-Protection', '1; mode=block')
-
-    // Content Type Options
     c.header('X-Content-Type-Options', 'nosniff')
-
-    // Referrer Policy
     c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
-
-    // Frame Options
     c.header('X-Frame-Options', 'DENY')
-
-    // Permissions Policy
-    c.header('Permissions-Policy',
-      'camera=(), microphone=(), geolocation=(), payment=()')
-
-    // Cache Control
-    c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
+    c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()')
 
     await next()
   }
 }
 
-// Global error handler
 export const errorHandler = () => {
-  return async (c: Context, next: Next) => {
+  return async (c: Context<{ Bindings: Env }>, next: Next) => {
     try {
       await next()
     } catch (err: unknown) {
@@ -68,67 +49,53 @@ export const errorHandler = () => {
   }
 }
 
-// Rate limiter (KV-based)
 export const rateLimitMiddleware = () => {
-  return async (c: Context, next: Next) => {
+  return async (c: Context<{ Bindings: Env }>, next: Next) => {
+    const path = c.req.path
+    const method = c.req.method
+
+    if (method === 'OPTIONS') {
+      await next()
+      return
+    }
+
     try {
-      const path = c.req.path
       const clientIP = c.req.header('CF-Connecting-IP') || 'unknown'
-      const key = `ratelimit:${path}:${clientIP}`
 
-      // Basic rate limit: 100 requests per minute
-      const windowStart = Math.floor(Date.now() / 1000 / 60) * 60
-      const currentKey = `${key}:${windowStart}`
+      let config = { window: 60, max: 100 }
+      if (path === '/api/auth/login') {
+        config = { window: 60, max: 10 }
+      } else if (path === '/api/auth/register') {
+        config = { window: 3600, max: 3 }
+      } else if (path === '/api/auth/refresh') {
+        config = { window: 60, max: 20 }
+      }
 
-      const currentCount = parseInt((await c.env.KV.get(currentKey)) || '0')
-      const maxRequests = 100
+      const windowStart = Math.floor(Date.now() / 1000 / config.window) * config.window
+      const key = `ratelimit:${path}:${clientIP}:${windowStart}`
+      const currentCount = parseInt((await c.env.KV.get(key)) || '0')
 
-      if (currentCount >= maxRequests) {
-        const retryAfter = 60 - (Date.now() / 1000 - windowStart)
-
+      if (currentCount >= config.max) {
+        const retryAfter = config.window - (Math.floor(Date.now() / 1000) - windowStart)
         c.header('Retry-After', String(Math.ceil(retryAfter)))
-
         return c.json({
           error: 'Too Many Requests',
           code: 'RATE_LIMITED',
-          message: 'Terlalu banyak permintaan. Coba lagi nanti',
+          message: 'Terlalu banyak permintaan. Coba lagi nanti.',
           retryAfter: Math.ceil(retryAfter)
         } as ApiError, 429)
       }
 
-      // Increment counter
-      await c.env.KV.put(currentKey, String(currentCount + 1), {
-        expirationTtl: 60
-      })
+      await c.env.KV.put(key, String(currentCount + 1), { expirationTtl: config.window })
 
-      // Set rate limit headers
-      c.header('X-RateLimit-Limit', String(maxRequests))
-      c.header('X-RateLimit-Remaining', String(maxRequests - currentCount - 1))
-      c.header('X-RateLimit-Reset', String(windowStart + 60))
+      c.header('X-RateLimit-Limit', String(config.max))
+      c.header('X-RateLimit-Remaining', String(config.max - currentCount - 1))
+      c.header('X-RateLimit-Reset', String(windowStart + config.window))
 
       await next()
     } catch (err) {
-      // If KV fails, allow request to proceed
       console.error('Rate limiter error:', err)
       await next()
     }
-  }
-}
-
-// JWT auth middleware (placeholder for now)
-export const authMiddleware = () => {
-  return async (c: Context, next: Next) => {
-    const token = c.req.header('Authorization')?.replace('Bearer ', '')
-
-    if (!token) {
-      return c.json({
-        error: 'Unauthorized',
-        code: 'NO_TOKEN',
-        message: 'Token tidak ditemukan'
-      } as ApiError, 401)
-    }
-
-    // TODO: Verify token
-    await next()
   }
 }
