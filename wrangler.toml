@@ -3,8 +3,14 @@ main = "src/worker.ts"
 compatibility_date = "2024-04-01"
 workers_dev = true
 
+# Static assets (frontend dist)
+[assets]
+directory = "./frontend/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
 [build]
-command = ""
+command = "cd frontend && npm run build"
 
 # Development environment (default / local)
 [[d1_databases]]
@@ -29,6 +35,11 @@ ENVIRONMENT = "development"
 name = "santrivora-staging"
 vars = { ENVIRONMENT = "staging" }
 
+[env.staging.assets]
+directory = "./frontend/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "santrivora-db-staging"
@@ -47,6 +58,14 @@ bucket_name = "santrivora-photos"
 [env.production]
 name = "santrivora-production"
 vars = { ENVIRONMENT = "production" }
+
+[env.production.assets]
+directory = "./frontend/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[env.production.build]
+command = "cd frontend && npm run build"
 
 [[env.production.d1_databases]]
 binding = "DB"

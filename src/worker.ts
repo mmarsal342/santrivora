@@ -14,11 +14,12 @@ import type { Env } from './types'
 
 const app = new Hono<{ Bindings: Env }>()
 
-app.use('*', securityHeadersMiddleware())
-app.use('*', cors())
-app.use('*', logger())
-app.use('*', errorHandler())
-app.use('*', rateLimitMiddleware())
+// API routes FIRST — these take priority over static assets
+app.use('/api/*', securityHeadersMiddleware())
+app.use('/api/*', cors())
+app.use('/api/*', logger())
+app.use('/api/*', errorHandler())
+app.use('/api/*', rateLimitMiddleware())
 
 app.route('/api/auth', authRoutes)
 app.route('/api/admin', adminRoutes)
@@ -29,6 +30,7 @@ app.route('/api/catatan', catatanRoutes)
 app.route('/api/dashboard', dashboardRoutes)
 app.route('/api/sync', syncRoutes)
 
+// Health check
 app.get('/health', (c) =>
   c.json({
     status: 'ok',
@@ -37,24 +39,9 @@ app.get('/health', (c) =>
   })
 )
 
-app.get('/', (c) =>
-  c.json({
-    name: 'SantriVora API',
-    version: '1.0.0',
-    documentation: '/api',
-    health: '/health'
-  })
-)
-
-app.notFound((c) =>
-  c.json(
-    {
-      error: 'Not Found',
-      code: 'NOT_FOUND',
-      message: 'Endpoint tidak ditemukan.'
-    },
-    404
-  )
-)
+// SPA fallback: serve frontend assets for non-API routes
+app.get('*', (c) => {
+  return c.env.ASSETS.fetch(c.req.raw)
+})
 
 export default app

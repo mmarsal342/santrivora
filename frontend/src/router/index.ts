@@ -1,0 +1,112 @@
+import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('@/views/auth/LoginView.vue'),
+      meta: { public: true }
+    },
+    {
+      path: '/register',
+      name: 'register',
+      component: () => import('@/views/auth/RegisterView.vue'),
+      meta: { public: true }
+    },
+    {
+      path: '/',
+      component: () => import('@/views/layouts/MainLayout.vue'),
+      meta: { auth: true },
+      children: [
+        {
+          path: '',
+          name: 'dashboard',
+          component: () => import('@/views/DashboardView.vue')
+        },
+        {
+          path: 'santri',
+          name: 'santri',
+          component: () => import('@/views/santri/SantriListView.vue')
+        },
+        {
+          path: 'santri/:id',
+          name: 'santri-detail',
+          component: () => import('@/views/santri/SantriDetailView.vue')
+        },
+        {
+          path: 'santri/new',
+          name: 'santri-new',
+          component: () => import('@/views/santri/SantriFormView.vue')
+        },
+        {
+          path: 'santri/:id/edit',
+          name: 'santri-edit',
+          component: () => import('@/views/santri/SantriFormView.vue')
+        },
+        {
+          path: 'catatan',
+          name: 'catatan',
+          component: () => import('@/views/catatan/CatatanListView.vue')
+        },
+        {
+          path: 'catatan/new',
+          name: 'catatan-new',
+          component: () => import('@/views/catatan/CatatanFormView.vue')
+        },
+        {
+          path: 'kelas',
+          name: 'kelas',
+          component: () => import('@/views/kelas/KelasListView.vue'),
+          meta: { adminOnly: true }
+        },
+        {
+          path: 'kategori',
+          name: 'kategori',
+          component: () => import('@/views/kategori/KategoriListView.vue'),
+          meta: { adminOnly: true }
+        },
+        {
+          path: 'users',
+          name: 'users',
+          component: () => import('@/views/users/UsersListView.vue'),
+          meta: { adminOnly: true }
+        },
+        {
+          path: 'settings',
+          name: 'settings',
+          component: () => import('@/views/SettingsView.vue')
+        }
+      ]
+    }
+  ]
+})
+
+router.beforeEach(async (to, _from, next) => {
+  const auth = useAuthStore()
+
+  if (to.meta.public) {
+    if (auth.isAuthenticated && (to.name === 'login' || to.name === 'register')) {
+      return next({ name: 'dashboard' })
+    }
+    return next()
+  }
+
+  if (to.meta.auth && !auth.isAuthenticated) {
+    return next({ name: 'login' })
+  }
+
+  if (auth.isAuthenticated && !auth.user) {
+    await auth.fetchMe()
+  }
+
+  if (to.meta.adminOnly && auth.user?.role !== 'admin') {
+    return next({ name: 'dashboard' })
+  }
+
+  next()
+})
+
+export default router
