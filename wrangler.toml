@@ -6,36 +6,21 @@ workers_dev = true
 [build]
 command = ""
 
-# Production database (will be created)
+# Development environment (default / local)
 [[d1_databases]]
 binding = "DB"
 database_name = "santrivora-db"
 database_id = "606a3c63-02e2-44f5-a3f3-b7f069df7499"
 
-# Staging database
-[[d1_databases]]
-binding = "DB_STAGING"
-database_name = "santrivora-db-staging"
-database_id = "9a916970-7831-458b-b864-87ee117109b1"
-
-# Development database
-[[d1_databases]]
-binding = "DB_DEV"
-database_name = "santrivora-db-dev"
-database_id = "20f10412-42ac-4c48-b5a9-7e412a3ba935"
-
-# KV for rate limiting & sessions
 [[kv_namespaces]]
 binding = "KV"
 id = "dce5e0ce216547beb570865b4f2bdb53"
 preview_id = "dcfcf5f8604249bdb2201c99b0002278"
 
-# R2 for photo storage
 [[r2_buckets]]
 binding = "R2"
 bucket_name = "santrivora-photos"
 
-# Environment variables
 [vars]
 ENVIRONMENT = "development"
 
@@ -53,6 +38,10 @@ database_id = "9a916970-7831-458b-b864-87ee117109b1"
 binding = "KV"
 id = "dce5e0ce216547beb570865b4f2bdb53"
 preview_id = "dcfcf5f8604249bdb2201c99b0002278"
+
+[[env.staging.r2_buckets]]
+binding = "R2"
+bucket_name = "santrivora-photos"
 
 # Production environment
 [env.production]
