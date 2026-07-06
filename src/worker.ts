@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
-import { cors, logger } from 'hono/middleware'
+import { cors } from 'hono/cors'
+import { logger } from 'hono/logger'
 import { authMiddleware, errorHandler, rateLimitMiddleware, securityHeadersMiddleware } from './middleware'
 import { authRoutes } from './routes/auth'
 import type { Env } from './types'

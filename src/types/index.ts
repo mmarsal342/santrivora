@@ -6,8 +6,6 @@ export interface Env {
 
   // Bindings
   DB: D1Database
-  DB_STAGING: D1Database
-  DB_DEV: D1Database
   KV: KVNamespace
   R2: R2Bucket
 
