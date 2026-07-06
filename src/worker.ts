@@ -9,6 +9,7 @@ import { santriRoutes } from './routes/santri'
 import { kategoriRoutes } from './routes/kategori'
 import { catatanRoutes } from './routes/catatan'
 import { dashboardRoutes } from './routes/dashboard'
+import { syncRoutes } from './routes/sync'
 import type { Env } from './types'
 
 const app = new Hono<{ Bindings: Env }>()
@@ -26,6 +27,7 @@ app.route('/api/santri', santriRoutes)
 app.route('/api/kategori-pelanggaran', kategoriRoutes)
 app.route('/api/catatan', catatanRoutes)
 app.route('/api/dashboard', dashboardRoutes)
+app.route('/api/sync', syncRoutes)
 
 app.get('/health', (c) =>
   c.json({
