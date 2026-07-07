@@ -12,6 +12,7 @@ const createSchema = z.object({
   nama_lengkap: z.string().min(2, 'Nama lengkap minimal 2 karakter').max(200),
   jenis_kelamin: z.enum(['L', 'P']),
   kelas_id: z.string().uuid().optional(),
+  kamar_id: z.string().uuid().optional(),
   angkatan: z.string().max(10).optional(),
   tanggal_masuk: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   foto_url: z.string().url().optional(),
@@ -24,6 +25,7 @@ const updateSchema = z.object({
   nama_lengkap: z.string().min(2).max(200).optional(),
   jenis_kelamin: z.enum(['L', 'P']).optional(),
   kelas_id: z.string().uuid().nullable().optional(),
+  kamar_id: z.string().uuid().nullable().optional(),
   angkatan: z.string().max(10).nullable().optional(),
   tanggal_masuk: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   status: z.enum(['aktif', 'lulus', 'keluar']).optional(),
@@ -32,21 +34,27 @@ const updateSchema = z.object({
   love_language: z.string().max(200).nullable().optional()
 })
 
-// GET /api/santri — scoped by role
+// GET /api/santri — scoped by role (wali kelas via kelas_ids, wali kamar via kamar_ids)
 santri.get('/', async (c) => {
   const user = c.get('user')
-  const { kelas_id, jenis_kelamin, angkatan, status, cursor, limit } = c.req.query()
+  const { kelas_id, kamar_id, jenis_kelamin, angkatan, status, cursor, limit } = c.req.query()
 
   const params: unknown[] = []
   const conditions: string[] = []
 
   if (user.role === 'ustadz') {
-    if (user.kelas_ids.length === 0) {
+    const scopeParts: string[] = []
+    if (user.kelas_ids.length > 0) {
+      scopeParts.push(`s.kelas_id IN (${user.kelas_ids.map(() => '?').join(',')})`)
+    }
+    if (user.kamar_ids.length > 0) {
+      scopeParts.push(`s.kamar_id IN (${user.kamar_ids.map(() => '?').join(',')})`)
+    }
+    if (scopeParts.length === 0) {
       return c.json({ data: [], pagination: { cursor: null, hasMore: false } })
     }
-    const ph = user.kelas_ids.map(() => '?').join(',')
-    conditions.push(`s.kelas_id IN (${ph})`)
-    params.push(...user.kelas_ids)
+    conditions.push(`(${scopeParts.join(' OR ')})`)
+    params.push(...user.kelas_ids, ...user.kamar_ids)
   }
 
   if (kelas_id) {
@@ -59,6 +67,17 @@ santri.get('/', async (c) => {
     }
     conditions.push('s.kelas_id = ?')
     params.push(kelas_id)
+  }
+  if (kamar_id) {
+    if (user.role === 'ustadz' && !user.kamar_ids.includes(kamar_id)) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'KAMAR_NOT_ASSIGNED',
+        message: 'Anda bukan wali kamar ini.'
+      } as ApiError, 403)
+    }
+    conditions.push('s.kamar_id = ?')
+    params.push(kamar_id)
   }
   if (jenis_kelamin) {
     conditions.push('s.jenis_kelamin = ?')
@@ -81,9 +100,10 @@ santri.get('/', async (c) => {
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
   const query = `
-    SELECT s.*, k.nama as kelas_nama, k.tingkatan
+    SELECT s.*, k.nama as kelas_nama, k.tingkatan, km.nama as kamar_nama, km.jenis_kelamin as kamar_jenis_kelamin
     FROM santri s
     LEFT JOIN kelas k ON s.kelas_id = k.id
+    LEFT JOIN kamar km ON s.kamar_id = km.id
     ${where}
     ORDER BY s.id ASC
     LIMIT ?
@@ -108,11 +128,12 @@ santri.get('/:id', async (c) => {
   const santriId = c.req.param('id')
 
   const santriData = await c.env.DB.prepare(`
-    SELECT s.*, k.nama as kelas_nama, k.tingkatan
+    SELECT s.*, k.nama as kelas_nama, k.tingkatan, km.nama as kamar_nama, km.jenis_kelamin as kamar_jenis_kelamin
     FROM santri s
     LEFT JOIN kelas k ON s.kelas_id = k.id
+    LEFT JOIN kamar km ON s.kamar_id = km.id
     WHERE s.id = ?
-  `).bind(santriId).first<{ kelas_id: string | null }>()
+  `).bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null }>()
 
   if (!santriData) {
     return c.json({
@@ -122,13 +143,20 @@ santri.get('/:id', async (c) => {
     } as ApiError, 404)
   }
 
-  // Scope check for ustadz
-  if (user.role === 'ustadz' && santriData.kelas_id && !user.kelas_ids.includes(santriData.kelas_id)) {
-    return c.json({
-      error: 'Forbidden',
-      code: 'SANTRI_NOT_IN_ASSIGNED_KELAS',
-      message: 'Anda tidak memiliki akses ke data santri ini.'
-    } as ApiError, 403)
+  // Scope check for ustadz — accessible via kelas assignment OR kamar assignment.
+  // A santri with neither assigned is unrestricted (matches the pre-kamar behavior).
+  if (user.role === 'ustadz') {
+    const viaKelas = !!santriData.kelas_id && user.kelas_ids.includes(santriData.kelas_id)
+    const viaKamar = !!santriData.kamar_id && user.kamar_ids.includes(santriData.kamar_id)
+    const santriHasAnyAssignment = !!santriData.kelas_id || !!santriData.kamar_id
+
+    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_ACCESSIBLE',
+        message: 'Anda tidak memiliki akses ke data santri ini.'
+      } as ApiError, 403)
+    }
   }
 
   // Get discipline records
@@ -160,6 +188,13 @@ santri.post('/', zValidator('json', createSchema), async (c) => {
       message: 'Anda tidak dapat menambah santri ke kelas yang tidak Anda ajar.'
     } as ApiError, 403)
   }
+  if (user.role === 'ustadz' && data.kamar_id && !user.kamar_ids.includes(data.kamar_id)) {
+    return c.json({
+      error: 'Forbidden',
+      code: 'KAMAR_NOT_ASSIGNED',
+      message: 'Anda bukan wali kamar tersebut.'
+    } as ApiError, 403)
+  }
 
   // Validate kelas exists
   if (data.kelas_id) {
@@ -172,14 +207,25 @@ santri.post('/', zValidator('json', createSchema), async (c) => {
       } as ApiError, 400)
     }
   }
+  // Validate kamar exists
+  if (data.kamar_id) {
+    const kamar = await c.env.DB.prepare('SELECT id FROM kamar WHERE id = ? AND is_active = 1').bind(data.kamar_id).first()
+    if (!kamar) {
+      return c.json({
+        error: 'Bad Request',
+        code: 'KAMAR_NOT_FOUND',
+        message: 'Kamar tidak ditemukan atau tidak aktif.'
+      } as ApiError, 400)
+    }
+  }
 
   const id = crypto.randomUUID()
   await c.env.DB.prepare(
-    `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, angkatan, tanggal_masuk, foto_url, tanggal_lahir, love_language)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, kamar_id, angkatan, tanggal_masuk, foto_url, tanggal_lahir, love_language)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, data.nama_lengkap, data.jenis_kelamin,
-    data.kelas_id || null, data.angkatan || null,
+    data.kelas_id || null, data.kamar_id || null, data.angkatan || null,
     data.tanggal_masuk || null, data.foto_url || null,
     data.tanggal_lahir || null, data.love_language || null
   ).run()
@@ -199,7 +245,7 @@ santri.put('/:id', zValidator('json', updateSchema), async (c) => {
   const data = c.req.valid('json')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM santri WHERE id = ?').bind(santriId).first<{ kelas_id: string | null }>()
+  const existing = await c.env.DB.prepare('SELECT * FROM santri WHERE id = ?').bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null }>()
   if (!existing) {
     return c.json({
       error: 'Not Found',
@@ -218,6 +264,14 @@ santri.put('/:id', zValidator('json', updateSchema), async (c) => {
         message: 'Anda tidak memiliki akses untuk mengubah data santri ini.'
       } as ApiError, 403)
     }
+    const targetKamarId = data.kamar_id !== undefined ? data.kamar_id : existing.kamar_id
+    if (targetKamarId && !user.kamar_ids.includes(targetKamarId)) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'KAMAR_NOT_ASSIGNED',
+        message: 'Anda bukan wali kamar tersebut.'
+      } as ApiError, 403)
+    }
   }
 
   // Validate kelas if changing
@@ -228,6 +282,17 @@ santri.put('/:id', zValidator('json', updateSchema), async (c) => {
         error: 'Bad Request',
         code: 'KELAS_NOT_FOUND',
         message: 'Kelas tidak ditemukan atau tidak aktif.'
+      } as ApiError, 400)
+    }
+  }
+  // Validate kamar if changing
+  if (data.kamar_id) {
+    const kamar = await c.env.DB.prepare('SELECT id FROM kamar WHERE id = ? AND is_active = 1').bind(data.kamar_id).first()
+    if (!kamar) {
+      return c.json({
+        error: 'Bad Request',
+        code: 'KAMAR_NOT_FOUND',
+        message: 'Kamar tidak ditemukan atau tidak aktif.'
       } as ApiError, 400)
     }
   }

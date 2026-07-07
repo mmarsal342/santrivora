@@ -10,6 +10,8 @@ interface User {
   status: string
   kelas_ids: string[]
   assigned_kelas?: Array<{ id: string; nama: string; tingkatan: string; tahun_ajaran: string }>
+  kamar_ids: string[]
+  assigned_kamar?: Array<{ id: string; nama: string; jenis_kelamin: 'L' | 'P'; kapasitas?: number }>
 }
 
 export const useAuthStore = defineStore('auth', () => {

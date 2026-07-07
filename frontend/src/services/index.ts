@@ -64,9 +64,91 @@ export const adminService = {
     return response.data
   },
 
+  async assignKamar(id: string, kamarIds: string[]) {
+    const response = await api.post(`/admin/users/${id}/assign-kamar`, { kamar_ids: kamarIds })
+    return response.data
+  },
+
   async getAuditLog(page = 1, limit = 50) {
     const response = await api.get('/admin/audit-log', { params: { page, limit } })
     return response.data
+  }
+}
+
+export const kamarService = {
+  async list() {
+    const response = await api.get('/kamar')
+    return response.data.data
+  },
+  async get(id: string) {
+    const response = await api.get(`/kamar/${id}`)
+    return response.data.data
+  },
+  async create(data: { nama: string; jenis_kelamin: 'L' | 'P'; kapasitas?: number }) {
+    const response = await api.post('/kamar', data)
+    return response.data.data
+  },
+  async update(id: string, data: Record<string, unknown>) {
+    const response = await api.put(`/kamar/${id}`, data)
+    return response.data.data
+  },
+  async remove(id: string) {
+    await api.delete(`/kamar/${id}`)
+  }
+}
+
+export const kegiatanService = {
+  async list(params?: { tanggal?: string; kelas_id?: string; kamar_id?: string }) {
+    const response = await api.get('/kegiatan', { params })
+    return response.data.data
+  },
+  async get(id: string) {
+    const response = await api.get(`/kegiatan/${id}`)
+    return response.data.data
+  },
+  async create(data: Record<string, unknown>) {
+    const response = await api.post('/kegiatan', data)
+    return response.data.data
+  },
+  async update(id: string, data: Record<string, unknown>) {
+    const response = await api.put(`/kegiatan/${id}`, data)
+    return response.data.data
+  },
+  async remove(id: string) {
+    await api.delete(`/kegiatan/${id}`)
+  }
+}
+
+export const absensiService = {
+  async bulkMark(payload: { tanggal: string; kegiatan_id?: string; items: Array<{ santri_id: string; status: string; keterangan?: string }> }) {
+    const response = await api.post('/absensi/bulk', payload)
+    return response.data.data
+  },
+  async list(params?: Record<string, string | number | undefined>) {
+    const response = await api.get('/absensi', { params })
+    return response.data
+  },
+  async rekap(params: { kamar_id?: string; dari: string; sampai: string }) {
+    const response = await api.get('/absensi/rekap', { params })
+    return response.data.data
+  },
+  async update(id: string, data: Record<string, unknown>) {
+    const response = await api.put(`/absensi/${id}`, data)
+    return response.data.data
+  }
+}
+
+export const catatanHaidService = {
+  async list(santriId: string) {
+    const response = await api.get('/catatan-haid', { params: { santri_id: santriId } })
+    return response.data.data
+  },
+  async upsert(data: { santri_id: string; tanggal: string; status: 'suci' | 'haid'; catatan?: string }) {
+    const response = await api.post('/catatan-haid', data)
+    return response.data.data
+  },
+  async remove(id: string) {
+    await api.delete(`/catatan-haid/${id}`)
   }
 }
 
@@ -162,5 +244,13 @@ export const dashboardService = {
   async trends(period: string = '7d') {
     const response = await api.get('/dashboard/trends', { params: { period } })
     return response.data.data
+  },
+  async perWaliKamar(params?: { dari?: string; sampai?: string }) {
+    const response = await api.get('/dashboard/per-wali-kamar', { params })
+    return response.data
+  },
+  async perWaliKamarSantri(userId: string, params?: { dari?: string; sampai?: string }) {
+    const response = await api.get(`/dashboard/per-wali-kamar/${userId}/santri`, { params })
+    return response.data
   }
 }
