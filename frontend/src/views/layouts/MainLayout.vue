@@ -130,7 +130,7 @@ async function handleLogout(): Promise<void> {
     >
       <div
         v-if="sidebarOpen"
-        class="fixed inset-0 z-30 bg-slate-900/50 backdrop-blur-sm lg:hidden"
+        class="fixed inset-0 z-30 bg-slate-900/50 lg:hidden"
         aria-hidden="true"
         @click="closeSidebar"
       ></div>
@@ -217,7 +217,7 @@ async function handleLogout(): Promise<void> {
     <!-- Content area -->
     <div class="flex min-h-screen flex-col lg:pl-64">
       <!-- Topbar -->
-      <header class="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/90 px-4 shadow-sm backdrop-blur sm:px-6">
+      <header class="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-white px-4 shadow-sm sm:px-6">
         <button
           type="button"
           class="rounded-md p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 lg:hidden"

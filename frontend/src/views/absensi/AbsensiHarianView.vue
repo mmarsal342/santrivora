@@ -71,7 +71,7 @@ async function loadKegiatan() {
     return
   }
   try {
-    kegiatanList.value = await kegiatanService.list({ kamar_id: selectedKamar.value, tanggal: tanggal.value })
+    kegiatanList.value = await kegiatanService.list({ tanggal: tanggal.value })
   } catch {
     kegiatanList.value = []
   }
@@ -86,16 +86,16 @@ async function loadRoster() {
   error.value = ''
   successMessage.value = ''
   try {
-    const res = await santriService.list({ kamar_id: selectedKamar.value, status: 'aktif', limit: 200 })
+    const [res, existingRes] = await Promise.all([
+      santriService.list({ kamar_id: selectedKamar.value, status: 'aktif', limit: 200 }),
+      absensiService.list({
+        kamar_id: selectedKamar.value,
+        tanggal: tanggal.value,
+        kegiatan_id: selectedKegiatan.value || undefined,
+        limit: 200
+      })
+    ])
     const santriData = (res.data ?? []) as Array<{ id: string; nama_lengkap: string }>
-
-    // Cek absensi yang udah pernah diinput hari ini (buat kegiatan yang sama) biar bisa dikoreksi
-    const existingRes = await absensiService.list({
-      kamar_id: selectedKamar.value,
-      tanggal: tanggal.value,
-      kegiatan_id: selectedKegiatan.value || undefined,
-      limit: 200
-    })
     const existingList = (existingRes.data ?? []) as Array<{ santri_id: string; status: AbsensiStatus; keterangan?: string }>
     const existingMap = new Map(existingList.map((a) => [a.santri_id, a]))
 

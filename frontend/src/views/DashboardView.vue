@@ -215,9 +215,15 @@ async function loadTrends(period: TrendPeriod) {
 }
 
 onMounted(() => {
-  loadSummary()
-  loadWaliKamar()
-  loadTrends('7d')
+  if (auth.isAdmin) {
+    loadSummary()
+    loadWaliKamar()
+    loadTrends('7d')
+  } else {
+    loading.value = false
+    loadingWali.value = false
+    loadingTrends.value = false
+  }
 })
 </script>
 

@@ -49,7 +49,7 @@ const errors = reactive<Record<string, string>>({
 const statusOptions = [
   { value: 'aktif', label: 'Aktif' },
   { value: 'lulus', label: 'Lulus' },
-  { value: 'nonaktif', label: 'Nonaktif' },
+  { value: 'keluar', label: 'Keluar' },
 ]
 
 const today = new Date().toISOString().slice(0, 10)
@@ -85,6 +85,10 @@ async function loadKelas() {
 async function loadKamar() {
   try {
     kamarOptions.value = (await kamarService.list()) as Kamar[]
+    if (!isEdit.value && kamarOptions.value.length === 1 && !form.kamar_id) {
+      form.kamar_id = kamarOptions.value[0].id
+      form.jenis_kelamin = kamarOptions.value[0].jenis_kelamin
+    }
   } catch {
     kamarOptions.value = []
   }
@@ -320,8 +324,8 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- Status -->
-      <div>
+      <!-- Status (only in edit mode — create defaults to 'aktif') -->
+      <div v-if="isEdit">
         <label for="status" class="mb-1.5 block text-sm font-medium text-slate-700">Status</label>
         <select
           id="status"
