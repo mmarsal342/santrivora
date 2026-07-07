@@ -333,7 +333,7 @@ santri.delete('/:id', async (c) => {
   const santriId = c.req.param('id')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM santri WHERE id = ?').bind(santriId).first<{ kelas_id: string | null }>()
+  const existing = await c.env.DB.prepare('SELECT * FROM santri WHERE id = ?').bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null }>()
   if (!existing) {
     return c.json({
       error: 'Not Found',
@@ -343,12 +343,17 @@ santri.delete('/:id', async (c) => {
   }
 
   // Scope check
-  if (user.role === 'ustadz' && existing.kelas_id && !user.kelas_ids.includes(existing.kelas_id)) {
-    return c.json({
-      error: 'Forbidden',
-      code: 'SANTRI_NOT_IN_ASSIGNED_KELAS',
-      message: 'Anda tidak memiliki akses untuk menghapus data santri ini.'
-    } as ApiError, 403)
+  if (user.role === 'ustadz') {
+    const viaKelas = !!existing.kelas_id && user.kelas_ids.includes(existing.kelas_id)
+    const viaKamar = !!existing.kamar_id && user.kamar_ids.includes(existing.kamar_id)
+    const santriHasAnyAssignment = !!existing.kelas_id || !!existing.kamar_id
+    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_ACCESSIBLE',
+        message: 'Anda tidak memiliki akses untuk menghapus data santri ini.'
+      } as ApiError, 403)
+    }
   }
 
   await c.env.DB.prepare(
