@@ -65,7 +65,14 @@ function findKamarId(nama: string): string | null {
   return match ? match.id : null
 }
 
-function parseCsv(text: string): string[][] {
+function detectDelimiter(text: string): string {
+  const firstLine = text.split(/\r?\n/)[0] || ''
+  const tabCount = (firstLine.match(/\t/g) || []).length
+  const commaCount = (firstLine.match(/,/g) || []).length
+  return tabCount > commaCount ? '\t' : ','
+}
+
+function parseCsv(text: string, delimiter: string = ','): string[][] {
   const rowsOut: string[][] = []
   let row: string[] = []
   let field = ''
@@ -86,7 +93,7 @@ function parseCsv(text: string): string[][] {
       }
     } else if (ch === '"') {
       inQuotes = true
-    } else if (ch === ',') {
+    } else if (ch === delimiter) {
       row.push(field)
       field = ''
     } else if (ch === '\n' || ch === '\r') {
@@ -118,7 +125,7 @@ function parseAndPreview() {
     return
   }
 
-  const table = parseCsv(text)
+  const table = parseCsv(text, detectDelimiter(text))
   if (table.length < 2) {
     parseError.value = 'CSV harus punya baris header dan minimal 1 baris data.'
     return
@@ -305,7 +312,7 @@ onMounted(loadOptions)
       </div>
 
       <div>
-        <label class="mb-1.5 block text-sm font-medium text-slate-700">…atau tempel isi CSV langsung</label>
+        <label class="mb-1.5 block text-sm font-medium text-slate-700">…atau tempel isi CSV langsung (boleh juga hasil copy-paste dari Excel/Google Sheets)</label>
         <textarea
           v-model="csvText"
           rows="8"
