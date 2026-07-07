@@ -13,7 +13,8 @@ export const authService = {
 
   async logout() {
     const token = localStorage.getItem('access_token')
-    await api.post('/auth/logout', { access_token: token })
+    const refreshToken = localStorage.getItem('refresh_token')
+    await api.post('/auth/logout', { access_token: token, refresh_token: refreshToken })
   },
 
   async getMe() {
