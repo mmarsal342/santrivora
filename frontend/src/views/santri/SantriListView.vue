@@ -1,19 +1,19 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { santriService, kelasService } from '@/services'
+import { santriService, kamarService } from '@/services'
 
 interface Santri {
   id: string
   nama_lengkap: string
   jenis_kelamin: 'L' | 'P'
-  kelas?: { id: string; nama: string }
-  kelas_nama?: string
+  kamar?: { id: string; nama: string }
+  kamar_nama?: string
   angkatan?: string | number
   status: string
 }
 
-interface Kelas {
+interface Kamar {
   id: string
   nama: string
 }
@@ -21,13 +21,13 @@ interface Kelas {
 const router = useRouter()
 
 const items = ref<Santri[]>([])
-const kelasOptions = ref<Kelas[]>([])
+const kamarOptions = ref<Kamar[]>([])
 const loading = ref(true)
 const loadingMore = ref(false)
 const error = ref('')
 
 const search = ref('')
-const filterKelas = ref('')
+const filterKamar = ref('')
 const filterKelamin = ref('')
 const filterStatus = ref('')
 
@@ -59,11 +59,11 @@ function kelaminLabel(k: string) {
   return k === 'L' ? 'Laki-laki' : k === 'P' ? 'Perempuan' : k
 }
 
-async function loadKelas() {
+async function loadKamar() {
   try {
-    kelasOptions.value = await kelasService.list()
+    kamarOptions.value = await kamarService.list()
   } catch {
-    kelasOptions.value = []
+    kamarOptions.value = []
   }
 }
 
@@ -73,7 +73,7 @@ async function fetchList(append = false) {
   if (!append) error.value = ''
   try {
     const params: Record<string, string | number | undefined> = { limit: 20 }
-    if (filterKelas.value) params.kelas_id = filterKelas.value
+    if (filterKamar.value) params.kamar_id = filterKamar.value
     if (filterKelamin.value) params.jenis_kelamin = filterKelamin.value
     if (filterStatus.value) params.status = filterStatus.value
     if (append && cursor.value) params.cursor = cursor.value
@@ -99,12 +99,12 @@ function loadMore() {
 
 function resetFilters() {
   search.value = ''
-  filterKelas.value = ''
+  filterKamar.value = ''
   filterKelamin.value = ''
   filterStatus.value = ''
 }
 
-watch([filterKelas, filterKelamin, filterStatus], () => {
+watch([filterKamar, filterKelamin, filterStatus], () => {
   cursor.value = undefined
   fetchList(false)
 })
@@ -129,7 +129,7 @@ async function doDelete() {
 }
 
 onMounted(() => {
-  loadKelas()
+  loadKamar()
   fetchList(false)
 })
 </script>
@@ -182,13 +182,13 @@ onMounted(() => {
           </div>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-medium text-slate-600">Kelas</label>
+          <label class="mb-1 block text-xs font-medium text-slate-600">Kamar</label>
           <select
-            v-model="filterKelas"
+            v-model="filterKamar"
             class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 bg-white"
           >
-            <option value="">Semua kelas</option>
-            <option v-for="k in kelasOptions" :key="k.id" :value="k.id">{{ k.nama }}</option>
+            <option value="">Semua kamar</option>
+            <option v-for="k in kamarOptions" :key="k.id" :value="k.id">{{ k.nama }}</option>
           </select>
         </div>
         <div>
@@ -248,7 +248,7 @@ onMounted(() => {
             <tr>
               <th class="px-5 py-3 text-left font-semibold text-slate-600">Nama</th>
               <th class="px-5 py-3 text-left font-semibold text-slate-600">L/P</th>
-              <th class="px-5 py-3 text-left font-semibold text-slate-600">Kelas</th>
+              <th class="px-5 py-3 text-left font-semibold text-slate-600">Kamar</th>
               <th class="px-5 py-3 text-left font-semibold text-slate-600">Angkatan</th>
               <th class="px-5 py-3 text-left font-semibold text-slate-600">Status</th>
               <th class="px-5 py-3 text-right font-semibold text-slate-600">Aksi</th>
@@ -265,7 +265,7 @@ onMounted(() => {
                 </div>
               </td>
               <td class="px-5 py-3 text-slate-600">{{ kelaminLabel(s.jenis_kelamin) }}</td>
-              <td class="px-5 py-3 text-slate-600">{{ s.kelas?.nama ?? s.kelas_nama ?? '-' }}</td>
+              <td class="px-5 py-3 text-slate-600">{{ s.kamar?.nama ?? s.kamar_nama ?? '-' }}</td>
               <td class="px-5 py-3 text-slate-600">{{ s.angkatan ?? '-' }}</td>
               <td class="px-5 py-3">
                 <span

@@ -6,11 +6,11 @@ import { dashboardService } from '@/services'
 interface DashboardSummary {
   totals: {
     santri: number
-    kelas: number
+    kamar: number
     pelanggaran_30hari: number
     prestasi_30hari: number
   }
-  per_kelas: Array<{
+  per_kamar: Array<{
     nama: string
     pelanggaran: number
     prestasi: number
@@ -18,7 +18,7 @@ interface DashboardSummary {
   }>
   top_pelanggar: Array<{
     nama_lengkap: string
-    kelas_nama: string
+    kamar_nama: string
     total: number
   }>
 }
@@ -73,13 +73,13 @@ const statCards = computed(() => {
   if (!t) return []
   return [
     { label: 'Total Santri', value: t.santri, icon: 'users', color: 'emerald', desc: 'Santri terdaftar' },
-    { label: 'Total Kelas', value: t.kelas, icon: 'academic', color: 'sky', desc: 'Kelas aktif' },
+    { label: 'Total Kamar', value: t.kamar, icon: 'academic', color: 'sky', desc: 'Kamar aktif' },
     { label: 'Pelanggaran 30 Hari', value: t.pelanggaran_30hari, icon: 'alert', color: 'rose', desc: 'Catatan terkini' },
     { label: 'Prestasi 30 Hari', value: t.prestasi_30hari, icon: 'star', color: 'amber', desc: 'Pencapaian santri' },
   ]
 })
 
-const assignedKelas = computed(() => auth.user?.assigned_kelas ?? [])
+const assignedKamar = computed(() => auth.user?.assigned_kamar ?? [])
 
 async function loadSummary() {
   loading.value = true
@@ -185,19 +185,19 @@ onMounted(() => {
         <div class="min-w-0">
           <h2 class="text-lg font-semibold text-emerald-900">Assalamu'alaikum, {{ auth.user?.nama_lengkap }}</h2>
           <p class="text-sm text-emerald-700 mt-1">
-            Anda terdaftar sebagai ustadz pembimbing. Berikut kelas yang ditugaskan kepada Anda.
+            Anda terdaftar sebagai ustadz pembimbing. Berikut kamar yang ditugaskan kepada Anda.
           </p>
-          <div v-if="assignedKelas.length" class="mt-3 flex flex-wrap gap-2">
+          <div v-if="assignedKamar.length" class="mt-3 flex flex-wrap gap-2">
             <span
-              v-for="k in assignedKelas"
+              v-for="k in assignedKamar"
               :key="k.id"
               class="inline-flex items-center rounded-full bg-white px-3 py-1 text-sm font-medium text-emerald-700 ring-1 ring-emerald-200"
             >
               {{ k.nama }}
-              <span v-if="k.tingkatan" class="ml-1 text-emerald-400">· {{ k.tingkatan }}</span>
+              <span class="ml-1 text-emerald-400">· {{ k.jenis_kelamin === 'P' ? 'Putri' : 'Putra' }}</span>
             </span>
           </div>
-          <p v-else class="mt-3 text-sm text-emerald-600 italic">Belum ada kelas yang ditugaskan.</p>
+          <p v-else class="mt-3 text-sm text-emerald-600 italic">Belum ada kamar yang ditugaskan.</p>
         </div>
       </div>
     </div>
@@ -254,24 +254,24 @@ onMounted(() => {
 
       <!-- Per kelas & top pelanggar -->
       <div v-if="summary" class="grid grid-cols-1 gap-6 lg:grid-cols-5">
-        <!-- Per kelas breakdown -->
+        <!-- Per kamar breakdown -->
         <section class="lg:col-span-3 rounded-xl border border-slate-200 bg-white shadow-sm">
           <div class="border-b border-slate-100 px-5 py-4">
-            <h2 class="text-base font-semibold text-slate-900">Rekap per Kelas</h2>
-            <p class="text-xs text-slate-500 mt-0.5">Distribusi pelanggaran &amp; prestasi tiap kelas</p>
+            <h2 class="text-base font-semibold text-slate-900">Rekap per Kamar</h2>
+            <p class="text-xs text-slate-500 mt-0.5">Distribusi pelanggaran &amp; prestasi tiap kamar</p>
           </div>
           <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-100 text-sm">
               <thead class="bg-slate-50">
                 <tr>
-                  <th class="px-5 py-3 text-left font-semibold text-slate-600">Kelas</th>
+                  <th class="px-5 py-3 text-left font-semibold text-slate-600">Kamar</th>
                   <th class="px-5 py-3 text-center font-semibold text-slate-600">Santri</th>
                   <th class="px-5 py-3 text-center font-semibold text-slate-600">Pelanggaran</th>
                   <th class="px-5 py-3 text-center font-semibold text-slate-600">Prestasi</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-50">
-                <tr v-for="k in summary.per_kelas" :key="k.nama" class="hover:bg-slate-50/60">
+                <tr v-for="k in summary.per_kamar" :key="k.nama" class="hover:bg-slate-50/60">
                   <td class="px-5 py-3 font-medium text-slate-800">{{ k.nama }}</td>
                   <td class="px-5 py-3 text-center text-slate-600">{{ k.jumlah_santri }}</td>
                   <td class="px-5 py-3 text-center">
@@ -281,8 +281,8 @@ onMounted(() => {
                     <span class="inline-flex min-w-[2rem] justify-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">{{ k.prestasi }}</span>
                   </td>
                 </tr>
-                <tr v-if="!summary.per_kelas.length">
-                  <td colspan="4" class="px-5 py-8 text-center text-slate-400">Belum ada data kelas.</td>
+                <tr v-if="!summary.per_kamar.length">
+                  <td colspan="4" class="px-5 py-8 text-center text-slate-400">Belum ada data kamar.</td>
                 </tr>
               </tbody>
             </table>
@@ -307,7 +307,7 @@ onMounted(() => {
               >{{ idx + 1 }}</span>
               <div class="min-w-0 flex-1">
                 <p class="truncate text-sm font-medium text-slate-800">{{ p.nama_lengkap }}</p>
-                <p class="truncate text-xs text-slate-500">{{ p.kelas_nama }}</p>
+                <p class="truncate text-xs text-slate-500">{{ p.kamar_nama }}</p>
               </div>
               <span class="shrink-0 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700">{{ p.total }}</span>
             </li>

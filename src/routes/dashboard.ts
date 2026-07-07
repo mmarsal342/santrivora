@@ -12,8 +12,8 @@ dashboard.get('/summary', requireRole('admin'), async (c) => {
     "SELECT COUNT(*) as count FROM santri WHERE status = 'aktif'"
   ).first<{ count: number }>()
 
-  const totalKelas = await c.env.DB.prepare(
-    'SELECT COUNT(*) as count FROM kelas WHERE is_active = 1'
+  const totalKamar = await c.env.DB.prepare(
+    'SELECT COUNT(*) as count FROM kamar WHERE is_active = 1'
   ).first<{ count: number }>()
 
   const totalPelanggaran = await c.env.DB.prepare(
@@ -36,26 +36,26 @@ dashboard.get('/summary', requireRole('admin'), async (c) => {
     ORDER BY total DESC
   `).all()
 
-  // Per kelas breakdown
-  const perKelas = await c.env.DB.prepare(`
-    SELECT k.id, k.nama,
+  // Per kamar breakdown
+  const perKamar = await c.env.DB.prepare(`
+    SELECT km.id, km.nama,
       COUNT(CASE WHEN cd.tipe = 'pelanggaran' THEN 1 END) as pelanggaran,
       COUNT(CASE WHEN cd.tipe = 'prestasi' THEN 1 END) as prestasi,
       COUNT(DISTINCT s.id) as jumlah_santri
-    FROM kelas k
-    LEFT JOIN santri s ON s.kelas_id = k.id AND s.status = 'aktif'
+    FROM kamar km
+    LEFT JOIN santri s ON s.kamar_id = km.id AND s.status = 'aktif'
     LEFT JOIN catatan_disiplin cd ON cd.santri_id = s.id AND cd.is_deleted = 0
       AND date(cd.tanggal_kejadian) >= date('now', '-30 days')
-    WHERE k.is_active = 1
-    GROUP BY k.id
-    ORDER BY k.nama
+    WHERE km.is_active = 1
+    GROUP BY km.id
+    ORDER BY km.nama
   `).all()
 
   // Top santri with most violations
   const topPelanggar = await c.env.DB.prepare(`
-    SELECT s.id, s.nama_lengkap, k.nama as kelas_nama, COUNT(cd.id) as total
+    SELECT s.id, s.nama_lengkap, km.nama as kamar_nama, COUNT(cd.id) as total
     FROM santri s
-    LEFT JOIN kelas k ON s.kelas_id = k.id
+    LEFT JOIN kamar km ON s.kamar_id = km.id
     INNER JOIN catatan_disiplin cd ON cd.santri_id = s.id
       AND cd.tipe = 'pelanggaran' AND cd.is_deleted = 0
       AND date(cd.tanggal_kejadian) >= date('now', '-30 days')
@@ -69,12 +69,12 @@ dashboard.get('/summary', requireRole('admin'), async (c) => {
     data: {
       totals: {
         santri: totalSantri?.count || 0,
-        kelas: totalKelas?.count || 0,
+        kamar: totalKamar?.count || 0,
         pelanggaran_30hari: totalPelanggaran?.count || 0,
         prestasi_30hari: totalPrestasi?.count || 0
       },
       per_kategori: perKategori.results,
-      per_kelas: perKelas.results,
+      per_kamar: perKamar.results,
       top_pelanggar: topPelanggar.results
     }
   })
