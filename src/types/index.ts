@@ -22,6 +22,7 @@ export interface UserPayload {
   email: string
   role: 'admin' | 'ustadz'
   kelas_ids: string[]
+  kamar_ids: string[]
   iat: number
   exp: number
   jti: string

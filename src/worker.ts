@@ -4,9 +4,13 @@ import { cors, errorHandler, rateLimitMiddleware, securityHeadersMiddleware, ALL
 import { authRoutes } from './routes/auth'
 import { adminRoutes } from './routes/admin'
 import { kelasRoutes } from './routes/kelas'
+import { kamarRoutes } from './routes/kamar'
 import { santriRoutes } from './routes/santri'
 import { kategoriRoutes } from './routes/kategori'
 import { catatanRoutes } from './routes/catatan'
+import { kegiatanRoutes } from './routes/kegiatan'
+import { absensiRoutes } from './routes/absensi'
+import { catatanHaidRoutes } from './routes/catatanHaid'
 import { dashboardRoutes } from './routes/dashboard'
 import { syncRoutes } from './routes/sync'
 import type { Env } from './types'
@@ -29,9 +33,13 @@ app.use('/api/*', rateLimitMiddleware())
 app.route('/api/auth', authRoutes)
 app.route('/api/admin', adminRoutes)
 app.route('/api/kelas', kelasRoutes)
+app.route('/api/kamar', kamarRoutes)
 app.route('/api/santri', santriRoutes)
 app.route('/api/kategori-pelanggaran', kategoriRoutes)
 app.route('/api/catatan', catatanRoutes)
+app.route('/api/kegiatan', kegiatanRoutes)
+app.route('/api/absensi', absensiRoutes)
+app.route('/api/catatan-haid', catatanHaidRoutes)
 app.route('/api/dashboard', dashboardRoutes)
 app.route('/api/sync', syncRoutes)
 

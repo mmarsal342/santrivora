@@ -13,6 +13,10 @@ const approveSchema = z.object({
   kelas_ids: z.array(z.string().uuid()).min(1, 'Minimal 1 kelas harus diassign')
 })
 
+const assignKamarSchema = z.object({
+  kamar_ids: z.array(z.string().uuid())
+})
+
 const resetPasswordSchema = z.object({
   new_password: z.string()
     .min(8, 'Password minimal 8 karakter')
@@ -72,16 +76,91 @@ admin.get('/users/:id', async (c) => {
     } as ApiError, 404)
   }
 
-  // Get assigned kelas
-  const assignments = await c.env.DB.prepare(
-    `SELECT k.id, k.nama, k.tingkatan, k.tahun_ajaran
-     FROM ustadz_kelas uk
-     JOIN kelas k ON uk.kelas_id = k.id
-     WHERE uk.user_id = ?`
-  ).bind(userId).all()
+  // Get assigned kelas + kamar
+  const [kelasAssignments, kamarAssignments] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT k.id, k.nama, k.tingkatan, k.tahun_ajaran
+       FROM ustadz_kelas uk
+       JOIN kelas k ON uk.kelas_id = k.id
+       WHERE uk.user_id = ?`
+    ).bind(userId).all(),
+    c.env.DB.prepare(
+      `SELECT k.id, k.nama, k.jenis_kelamin, k.kapasitas
+       FROM ustadz_kamar uk
+       JOIN kamar k ON uk.kamar_id = k.id
+       WHERE uk.user_id = ?`
+    ).bind(userId).all()
+  ])
 
   return c.json({
-    data: { ...user, assigned_kelas: assignments.results }
+    data: { ...user, assigned_kelas: kelasAssignments.results, assigned_kamar: kamarAssignments.results }
+  })
+})
+
+// POST /api/admin/users/:id/assign-kamar — set wali kamar assignment (replaces existing)
+admin.post('/users/:id/assign-kamar', zValidator('json', assignKamarSchema), async (c) => {
+  const userId = c.req.param('id')
+  const { kamar_ids } = c.req.valid('json')
+  const adminUser = c.get('user')
+
+  const user = await c.env.DB.prepare(
+    'SELECT id, role FROM users WHERE id = ?'
+  ).bind(userId).first<{ id: string; role: string }>()
+
+  if (!user) {
+    return c.json({
+      error: 'Not Found',
+      code: 'USER_NOT_FOUND',
+      message: 'User tidak ditemukan.'
+    } as ApiError, 404)
+  }
+
+  if (user.role !== 'ustadz') {
+    return c.json({
+      error: 'Bad Request',
+      code: 'INVALID_ROLE',
+      message: 'Hanya ustadz/ustadzah yang dapat menjadi wali kamar.'
+    } as ApiError, 400)
+  }
+
+  if (kamar_ids.length > 0) {
+    const placeholders = kamar_ids.map(() => '?').join(',')
+    const validKamar = await c.env.DB.prepare(
+      `SELECT id FROM kamar WHERE id IN (${placeholders}) AND is_active = 1`
+    ).bind(...kamar_ids).all()
+
+    if (validKamar.results.length !== kamar_ids.length) {
+      return c.json({
+        error: 'Bad Request',
+        code: 'INVALID_KAMAR',
+        message: 'Beberapa kamar tidak ditemukan atau tidak aktif.'
+      } as ApiError, 400)
+    }
+  }
+
+  await c.env.DB.prepare('DELETE FROM ustadz_kamar WHERE user_id = ?').bind(userId).run()
+
+  if (kamar_ids.length > 0) {
+    const stmt = c.env.DB.prepare(
+      'INSERT INTO ustadz_kamar (user_id, kamar_id) VALUES (?, ?)'
+    )
+    const batch = kamar_ids.map((kamarId) => stmt.bind(userId, kamarId))
+    await c.env.DB.batch(batch)
+  }
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
+     VALUES (?, ?, 'user.assign_kamar', 'users', ?, ?)`
+  ).bind(
+    crypto.randomUUID(),
+    adminUser.sub,
+    userId,
+    JSON.stringify({ kamar_ids })
+  ).run()
+
+  return c.json({
+    message: 'Wali kamar berhasil diperbarui.',
+    data: { id: userId, kamar_ids }
   })
 })
 

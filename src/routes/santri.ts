@@ -301,30 +301,58 @@ santri.post('/bulk', zValidator('json', bulkSchema), async (c) => {
   const { santri: santriList } = c.req.valid('json')
   const user = c.get('user')
 
-  const stmt = c.env.DB.prepare(
-    `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, angkatan, tanggal_masuk)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  )
+  const results: Array<{ row: number; status: 'created' | 'error'; id?: string; error?: string }> = []
+  const kelasCache = new Map<string, boolean>()
 
-  const batch = santriList.map((s) => {
+  for (let row = 0; row < santriList.length; row++) {
+    const s = santriList[row]
+
     if (user.role === 'ustadz' && s.kelas_id && !user.kelas_ids.includes(s.kelas_id)) {
-      throw new Error('KELAS_NOT_ASSIGNED')
+      results.push({ row, status: 'error', error: 'KELAS_NOT_ASSIGNED' })
+      continue
     }
-    return stmt.bind(
-      crypto.randomUUID(), s.nama_lengkap, s.jenis_kelamin,
-      s.kelas_id || null, s.angkatan || null, s.tanggal_masuk || null
-    )
-  })
 
-  const results = await c.env.DB.batch(batch)
-  const success = results.filter(r => r.success).length
+    if (s.kelas_id) {
+      let kelasValid = kelasCache.get(s.kelas_id)
+      if (kelasValid === undefined) {
+        const kelas = await c.env.DB.prepare(
+          'SELECT id FROM kelas WHERE id = ? AND is_active = 1'
+        ).bind(s.kelas_id).first()
+        kelasValid = !!kelas
+        kelasCache.set(s.kelas_id, kelasValid)
+      }
+      if (!kelasValid) {
+        results.push({ row, status: 'error', error: 'KELAS_NOT_FOUND' })
+        continue
+      }
+    }
+
+    try {
+      const id = crypto.randomUUID()
+      await c.env.DB.prepare(
+        `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, angkatan, tanggal_masuk)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(
+        id, s.nama_lengkap, s.jenis_kelamin,
+        s.kelas_id || null, s.angkatan || null, s.tanggal_masuk || null
+      ).run()
+      results.push({ row, status: 'created', id })
+    } catch (err: any) {
+      results.push({ row, status: 'error', error: err.message || 'UNKNOWN_ERROR' })
+    }
+  }
+
+  const success = results.filter((r) => r.status === 'created').length
 
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
      VALUES (?, ?, 'santri.bulk_create', 'santri', ?, ?)`
-  ).bind(crypto.randomUUID(), user.sub, user.sub, JSON.stringify({ count: success })).run()
+  ).bind(crypto.randomUUID(), user.sub, user.sub, JSON.stringify({ total: santriList.length, success })).run()
 
-  return c.json({ message: `${success} santri berhasil diimport.`, data: { count: success } })
+  return c.json({
+    message: `${success}/${santriList.length} santri berhasil diimport.`,
+    data: { results, success, total: santriList.length }
+  })
 })
 
 export { santri as santriRoutes }

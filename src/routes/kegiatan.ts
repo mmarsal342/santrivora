@@ -1,0 +1,238 @@
+import { Hono } from 'hono'
+import { z } from 'zod'
+import { zValidator } from '@hono/zod-validator'
+import { authMiddleware } from '../middleware/auth'
+import type { ApiError, Env, UserPayload } from '../types'
+
+const kegiatan = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
+
+kegiatan.use('*', authMiddleware)
+
+const createSchema = z.object({
+  nama: z.string().min(1, 'Nama kegiatan harus diisi').max(200),
+  jenis: z.string().max(50).optional(),
+  tanggal: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal harus YYYY-MM-DD'),
+  kelas_id: z.string().uuid().optional(),
+  kamar_id: z.string().uuid().optional()
+})
+
+const updateSchema = z.object({
+  nama: z.string().min(1).max(200).optional(),
+  jenis: z.string().max(50).nullable().optional(),
+  tanggal: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  kelas_id: z.string().uuid().nullable().optional(),
+  kamar_id: z.string().uuid().nullable().optional(),
+  is_active: z.number().int().optional()
+})
+
+function canManage(user: UserPayload, kegiatanRow: { created_by: string }) {
+  return user.role === 'admin' || user.sub === kegiatanRow.created_by
+}
+
+// GET /api/kegiatan — filter by tanggal/kelas_id/kamar_id, scoped by role
+kegiatan.get('/', async (c) => {
+  const user = c.get('user')
+  const { tanggal, kelas_id, kamar_id } = c.req.query()
+
+  const conditions: string[] = ['is_active = 1']
+  const params: unknown[] = []
+
+  if (tanggal) {
+    conditions.push('tanggal = ?')
+    params.push(tanggal)
+  }
+  if (kelas_id) {
+    conditions.push('kelas_id = ?')
+    params.push(kelas_id)
+  }
+  if (kamar_id) {
+    conditions.push('kamar_id = ?')
+    params.push(kamar_id)
+  }
+
+  if (user.role === 'ustadz') {
+    const scopeParts = ['(kelas_id IS NULL AND kamar_id IS NULL)']
+    if (user.kelas_ids.length > 0) {
+      scopeParts.push(`kelas_id IN (${user.kelas_ids.map(() => '?').join(',')})`)
+    }
+    if (user.kamar_ids.length > 0) {
+      scopeParts.push(`kamar_id IN (${user.kamar_ids.map(() => '?').join(',')})`)
+    }
+    conditions.push(`(${scopeParts.join(' OR ')})`)
+    params.push(...user.kelas_ids, ...user.kamar_ids)
+  }
+
+  const query = `
+    SELECT g.*, k.nama as kelas_nama, r.nama as kamar_nama
+    FROM kegiatan g
+    LEFT JOIN kelas k ON g.kelas_id = k.id
+    LEFT JOIN kamar r ON g.kamar_id = r.id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY g.tanggal DESC, g.nama ASC
+  `
+  const result = await c.env.DB.prepare(query).bind(...params).all()
+  return c.json({ data: result.results || [] })
+})
+
+// GET /api/kegiatan/:id
+kegiatan.get('/:id', async (c) => {
+  const user = c.get('user')
+  const id = c.req.param('id')
+
+  const result = await c.env.DB.prepare(`
+    SELECT g.*, k.nama as kelas_nama, r.nama as kamar_nama
+    FROM kegiatan g
+    LEFT JOIN kelas k ON g.kelas_id = k.id
+    LEFT JOIN kamar r ON g.kamar_id = r.id
+    WHERE g.id = ?
+  `).bind(id).first<{ kelas_id: string | null; kamar_id: string | null }>()
+
+  if (!result) {
+    return c.json({
+      error: 'Not Found',
+      code: 'KEGIATAN_NOT_FOUND',
+      message: 'Kegiatan tidak ditemukan.'
+    } as ApiError, 404)
+  }
+
+  if (user.role === 'ustadz') {
+    const inKelas = result.kelas_id && user.kelas_ids.includes(result.kelas_id)
+    const inKamar = result.kamar_id && user.kamar_ids.includes(result.kamar_id)
+    const isGeneral = !result.kelas_id && !result.kamar_id
+    if (!inKelas && !inKamar && !isGeneral) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'KEGIATAN_NOT_ACCESSIBLE',
+        message: 'Anda tidak memiliki akses ke kegiatan ini.'
+      } as ApiError, 403)
+    }
+  }
+
+  return c.json({ data: result })
+})
+
+// POST /api/kegiatan
+kegiatan.post('/', zValidator('json', createSchema), async (c) => {
+  const data = c.req.valid('json')
+  const user = c.get('user')
+
+  if (user.role === 'ustadz') {
+    if (data.kelas_id && !user.kelas_ids.includes(data.kelas_id)) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'KELAS_NOT_ASSIGNED',
+        message: 'Anda tidak dapat membuat kegiatan untuk kelas yang tidak Anda ajar.'
+      } as ApiError, 403)
+    }
+    if (data.kamar_id && !user.kamar_ids.includes(data.kamar_id)) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'KAMAR_NOT_ASSIGNED',
+        message: 'Anda bukan wali kamar tersebut.'
+      } as ApiError, 403)
+    }
+  }
+
+  const id = crypto.randomUUID()
+  await c.env.DB.prepare(
+    `INSERT INTO kegiatan (id, nama, jenis, tanggal, kelas_id, kamar_id, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    id, data.nama, data.jenis || null, data.tanggal,
+    data.kelas_id || null, data.kamar_id || null, user.sub
+  ).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
+     VALUES (?, ?, 'kegiatan.create', 'kegiatan', ?, ?)`
+  ).bind(crypto.randomUUID(), user.sub, id, JSON.stringify(data)).run()
+
+  const result = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ?').bind(id).first()
+  return c.json({ message: 'Kegiatan berhasil dibuat.', data: result }, 201)
+})
+
+// PUT /api/kegiatan/:id — admin atau pembuat kegiatan
+kegiatan.put('/:id', zValidator('json', updateSchema), async (c) => {
+  const id = c.req.param('id')
+  const data = c.req.valid('json')
+  const user = c.get('user')
+
+  const existing = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ?').bind(id).first<{ created_by: string }>()
+  if (!existing) {
+    return c.json({
+      error: 'Not Found',
+      code: 'KEGIATAN_NOT_FOUND',
+      message: 'Kegiatan tidak ditemukan.'
+    } as ApiError, 404)
+  }
+
+  if (!canManage(user, existing)) {
+    return c.json({
+      error: 'Forbidden',
+      code: 'INSUFFICIENT_PERMISSIONS',
+      message: 'Anda tidak dapat mengubah kegiatan ini.'
+    } as ApiError, 403)
+  }
+
+  const updates: string[] = []
+  const params: unknown[] = []
+  for (const [key, value] of Object.entries(data)) {
+    if (value !== undefined) {
+      updates.push(`${key} = ?`)
+      params.push(value)
+    }
+  }
+
+  if (updates.length === 0) {
+    return c.json({ message: 'Tidak ada perubahan.', data: existing })
+  }
+
+  updates.push("updated_at = datetime('now')")
+  params.push(id)
+
+  await c.env.DB.prepare(`UPDATE kegiatan SET ${updates.join(', ')} WHERE id = ?`).bind(...params).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, old_value, new_value)
+     VALUES (?, ?, 'kegiatan.update', 'kegiatan', ?, ?, ?)`
+  ).bind(crypto.randomUUID(), user.sub, id, JSON.stringify(existing), JSON.stringify(data)).run()
+
+  const result = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ?').bind(id).first()
+  return c.json({ message: 'Kegiatan berhasil diperbarui.', data: result })
+})
+
+// DELETE /api/kegiatan/:id — soft delete, admin atau pembuat kegiatan
+kegiatan.delete('/:id', async (c) => {
+  const id = c.req.param('id')
+  const user = c.get('user')
+
+  const existing = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ? AND is_active = 1').bind(id).first<{ created_by: string }>()
+  if (!existing) {
+    return c.json({
+      error: 'Not Found',
+      code: 'KEGIATAN_NOT_FOUND',
+      message: 'Kegiatan tidak ditemukan atau sudah tidak aktif.'
+    } as ApiError, 404)
+  }
+
+  if (!canManage(user, existing)) {
+    return c.json({
+      error: 'Forbidden',
+      code: 'INSUFFICIENT_PERMISSIONS',
+      message: 'Anda tidak dapat menghapus kegiatan ini.'
+    } as ApiError, 403)
+  }
+
+  await c.env.DB.prepare(
+    "UPDATE kegiatan SET is_active = 0, updated_at = datetime('now') WHERE id = ?"
+  ).bind(id).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id)
+     VALUES (?, ?, 'kegiatan.delete', 'kegiatan', ?)`
+  ).bind(crypto.randomUUID(), user.sub, id).run()
+
+  return c.json({ message: 'Kegiatan berhasil dihapus.' })
+})
+
+export { kegiatan as kegiatanRoutes }

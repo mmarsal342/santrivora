@@ -130,13 +130,16 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
     } as ApiError, 403)
   }
 
-  // Get kelas_ids if ustadz
+  // Get kelas_ids / kamar_ids if ustadz
   let kelasIds: string[] = []
+  let kamarIds: string[] = []
   if (user.role === 'ustadz') {
-    const assignments = await c.env.DB.prepare(
-      'SELECT kelas_id FROM ustadz_kelas WHERE user_id = ?'
-    ).bind(user.id).all<{ kelas_id: string }>()
-    kelasIds = assignments.results?.map((r) => r.kelas_id) || []
+    const [kelasAssignments, kamarAssignments] = await Promise.all([
+      c.env.DB.prepare('SELECT kelas_id FROM ustadz_kelas WHERE user_id = ?').bind(user.id).all<{ kelas_id: string }>(),
+      c.env.DB.prepare('SELECT kamar_id FROM ustadz_kamar WHERE user_id = ?').bind(user.id).all<{ kamar_id: string }>()
+    ])
+    kelasIds = kelasAssignments.results?.map((r) => r.kelas_id) || []
+    kamarIds = kamarAssignments.results?.map((r) => r.kamar_id) || []
   }
 
   // Generate tokens
@@ -145,7 +148,8 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
     user.email,
     user.role,
     kelasIds,
-    { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET }
+    { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET },
+    kamarIds
   )
 
   // Store session
@@ -182,7 +186,8 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
         nama_lengkap: user.nama_lengkap,
         role: user.role,
         status: user.status,
-        kelas_ids: kelasIds
+        kelas_ids: kelasIds,
+        kamar_ids: kamarIds
       }
     }
   })
@@ -244,13 +249,16 @@ auth.post('/refresh', async (c) => {
     } as ApiError, 401)
   }
 
-  // Get kelas_ids
+  // Get kelas_ids / kamar_ids
   let kelasIds: string[] = []
+  let kamarIds: string[] = []
   if (user.role === 'ustadz') {
-    const assignments = await c.env.DB.prepare(
-      'SELECT kelas_id FROM ustadz_kelas WHERE user_id = ?'
-    ).bind(user.id).all<{ kelas_id: string }>()
-    kelasIds = assignments.results?.map((r) => r.kelas_id) || []
+    const [kelasAssignments, kamarAssignments] = await Promise.all([
+      c.env.DB.prepare('SELECT kelas_id FROM ustadz_kelas WHERE user_id = ?').bind(user.id).all<{ kelas_id: string }>(),
+      c.env.DB.prepare('SELECT kamar_id FROM ustadz_kamar WHERE user_id = ?').bind(user.id).all<{ kamar_id: string }>()
+    ])
+    kelasIds = kelasAssignments.results?.map((r) => r.kelas_id) || []
+    kamarIds = kamarAssignments.results?.map((r) => r.kamar_id) || []
   }
 
   // Generate new tokens
@@ -259,7 +267,8 @@ auth.post('/refresh', async (c) => {
     user.email,
     user.role,
     kelasIds,
-    { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET }
+    { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET },
+    kamarIds
   )
 
   // Rotate the session's jti — the old refresh token can no longer be used,
@@ -332,22 +341,36 @@ auth.get('/me', authMiddleware, async (c) => {
 
   let kelasIds: string[] = []
   let assignedKelas: unknown[] = []
+  let kamarIds: string[] = []
+  let assignedKamar: unknown[] = []
   if (userPayload.role === 'ustadz') {
-    const assignments = await c.env.DB.prepare(
-      `SELECT k.id, k.nama, k.tingkatan, k.tahun_ajaran
-       FROM ustadz_kelas uk
-       JOIN kelas k ON uk.kelas_id = k.id
-       WHERE uk.user_id = ? AND k.is_active = 1`
-    ).bind(userPayload.sub).all()
-    assignedKelas = assignments.results || []
-    kelasIds = (assignments.results || []).map((k: { id: string }) => k.id)
+    const [kelasAssignments, kamarAssignments] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT k.id, k.nama, k.tingkatan, k.tahun_ajaran
+         FROM ustadz_kelas uk
+         JOIN kelas k ON uk.kelas_id = k.id
+         WHERE uk.user_id = ? AND k.is_active = 1`
+      ).bind(userPayload.sub).all(),
+      c.env.DB.prepare(
+        `SELECT k.id, k.nama, k.jenis_kelamin, k.kapasitas
+         FROM ustadz_kamar uk
+         JOIN kamar k ON uk.kamar_id = k.id
+         WHERE uk.user_id = ? AND k.is_active = 1`
+      ).bind(userPayload.sub).all()
+    ])
+    assignedKelas = kelasAssignments.results || []
+    kelasIds = (kelasAssignments.results || []).map((k: { id: string }) => k.id)
+    assignedKamar = kamarAssignments.results || []
+    kamarIds = (kamarAssignments.results || []).map((k: { id: string }) => k.id)
   }
 
   return c.json({
     data: {
       ...user,
       kelas_ids: kelasIds,
-      assigned_kelas: assignedKelas
+      assigned_kelas: assignedKelas,
+      kamar_ids: kamarIds,
+      assigned_kamar: assignedKamar
     }
   })
 })
@@ -422,7 +445,8 @@ auth.post('/change-password', authMiddleware, zValidator('json', changePasswordS
     userPayload.email,
     userPayload.role,
     userPayload.kelas_ids,
-    { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET }
+    { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET },
+    userPayload.kamar_ids
   )
 
   await c.env.DB.prepare(

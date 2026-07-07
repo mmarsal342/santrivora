@@ -17,7 +17,8 @@ export async function generateTokens(
   email: string,
   role: string,
   kelasIds: string[],
-  secrets: { access: string; refresh: string }
+  secrets: { access: string; refresh: string },
+  kamarIds: string[] = []
 ): Promise<{ access_token: string; refresh_token: string; refresh_jti: string }> {
   const now = Math.floor(Date.now() / 1000)
   const refreshJti = crypto.randomUUID()
@@ -27,6 +28,7 @@ export async function generateTokens(
     email,
     role: role as 'admin' | 'ustadz',
     kelas_ids: kelasIds,
+    kamar_ids: kamarIds,
     iat: now,
     exp: now + 900, // 15 minutes
     jti: crypto.randomUUID()
