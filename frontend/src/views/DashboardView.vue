@@ -45,6 +45,19 @@ interface SantriDrilldown {
   prestasi_total: number
 }
 
+interface TrendRow {
+  date: string
+  tipe: 'pelanggaran' | 'prestasi'
+  total: number
+}
+
+interface TrendsResponse {
+  period: string
+  trends: TrendRow[]
+}
+
+type TrendPeriod = '7d' | '30d' | '90d'
+
 const auth = useAuthStore()
 const summary = ref<DashboardSummary | null>(null)
 const loading = ref(true)
@@ -59,7 +72,49 @@ const periodSampai = ref('')
 const drilldownSantri = ref<SantriDrilldown[]>([])
 const loadingDrilldown = ref(false)
 
+const trends = ref<TrendsResponse | null>(null)
+const loadingTrends = ref(true)
+const trendsError = ref('')
+const trendPeriod = ref<TrendPeriod>('7d')
+const trendPeriods: readonly { value: TrendPeriod; label: string }[] = [
+  { value: '7d', label: '7 Hari' },
+  { value: '30d', label: '30 Hari' },
+  { value: '90d', label: '90 Hari' }
+]
+
 const selectedWali = computed(() => waliKamarList.value.find((w) => w.id === selectedWaliId.value) || null)
+
+const trendChartData = computed(() => {
+  const map = new Map<string, { date: string; pelanggaran: number; prestasi: number }>()
+  for (const row of trends.value?.trends ?? []) {
+    const entry = map.get(row.date) ?? { date: row.date, pelanggaran: 0, prestasi: 0 }
+    if (row.tipe === 'pelanggaran') entry.pelanggaran = row.total
+    else if (row.tipe === 'prestasi') entry.prestasi = row.total
+    map.set(row.date, entry)
+  }
+  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date))
+})
+
+const trendMax = computed(() =>
+  trendChartData.value.reduce((max, d) => Math.max(max, d.pelanggaran, d.prestasi), 0)
+)
+
+const trendLabelStep = computed(() => {
+  const n = trendChartData.value.length
+  if (n <= 10) return 1
+  if (n <= 40) return 3
+  return 7
+})
+
+function trendBarHeight(value: number): number {
+  if (!trendMax.value || value <= 0) return 0
+  return Math.max(Math.round((value / trendMax.value) * 100), 4)
+}
+
+function formatTrendDate(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00')
+  return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })
+}
 
 const colorClasses: Record<string, { iconBg: string; iconText: string; value: string }> = {
   emerald: { iconBg: 'bg-emerald-50', iconText: 'text-emerald-600', value: 'text-emerald-700' },
@@ -145,9 +200,24 @@ function applyPeriod() {
   loadWaliKamar()
 }
 
+async function loadTrends(period: TrendPeriod) {
+  trendPeriod.value = period
+  loadingTrends.value = true
+  trendsError.value = ''
+  try {
+    trends.value = await dashboardService.trends(period)
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    trendsError.value = err?.response?.data?.message || 'Gagal memuat data tren.'
+  } finally {
+    loadingTrends.value = false
+  }
+}
+
 onMounted(() => {
   loadSummary()
   loadWaliKamar()
+  loadTrends('7d')
 })
 </script>
 
@@ -251,6 +321,64 @@ onMounted(() => {
           <p class="mt-3 text-xs text-slate-400">{{ card.desc }}</p>
         </div>
       </dl>
+
+      <!-- Tren Pelanggaran & Prestasi -->
+      <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 class="text-base font-semibold text-slate-900">Tren Pelanggaran &amp; Prestasi</h2>
+            <p class="text-xs text-slate-500 mt-0.5">Perkembangan catatan disiplin dari waktu ke waktu</p>
+          </div>
+          <div class="flex gap-1 rounded-lg bg-slate-100 p-1">
+            <button
+              v-for="p in trendPeriods"
+              :key="p.value"
+              type="button"
+              @click="loadTrends(p.value)"
+              :disabled="loadingTrends"
+              class="rounded-md px-3 py-1.5 text-xs font-medium transition disabled:opacity-50"
+              :class="trendPeriod === p.value ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            >{{ p.label }}</button>
+          </div>
+        </div>
+
+        <div v-if="trendsError" class="mx-5 mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+          {{ trendsError }}
+        </div>
+
+        <div v-if="loadingTrends && !trends" class="p-5">
+          <div class="h-48 animate-pulse rounded-lg bg-slate-100"></div>
+        </div>
+
+        <div v-else-if="!trendChartData.length" class="p-10 text-center text-sm text-slate-400">
+          Belum ada data pelanggaran/prestasi pada periode ini.
+        </div>
+
+        <div v-else class="p-5">
+          <div class="mb-3 flex items-center gap-4 text-xs text-slate-500">
+            <span class="inline-flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-rose-400"></span>Pelanggaran</span>
+            <span class="inline-flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-amber-400"></span>Prestasi</span>
+          </div>
+          <div class="overflow-x-auto">
+            <div class="flex h-48 items-end gap-2 pb-1" :style="{ minWidth: trendChartData.length * 28 + 'px' }">
+              <div
+                v-for="(d, idx) in trendChartData"
+                :key="d.date"
+                class="flex h-full flex-1 flex-col items-center justify-end gap-1"
+                :title="`${formatTrendDate(d.date)} — Pelanggaran: ${d.pelanggaran}, Prestasi: ${d.prestasi}`"
+              >
+                <div class="flex h-full w-full items-end justify-center gap-0.5">
+                  <div class="w-2.5 rounded-t bg-rose-400" :style="{ height: trendBarHeight(d.pelanggaran) + '%' }"></div>
+                  <div class="w-2.5 rounded-t bg-amber-400" :style="{ height: trendBarHeight(d.prestasi) + '%' }"></div>
+                </div>
+                <span class="whitespace-nowrap text-[10px] text-slate-400" :class="{ invisible: idx % trendLabelStep !== 0 }">
+                  {{ formatTrendDate(d.date) }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <!-- Per kelas & top pelanggar -->
       <div v-if="summary" class="grid grid-cols-1 gap-6 lg:grid-cols-5">
