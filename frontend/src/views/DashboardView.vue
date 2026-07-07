@@ -23,10 +23,43 @@ interface DashboardSummary {
   }>
 }
 
+interface WaliKamarSummary {
+  id: string
+  nama_lengkap: string
+  email: string
+  status: string
+  assigned_kamar: Array<{ id: string; nama: string; jenis_kelamin: 'L' | 'P' }>
+  catatan_haid_tercatat: number | null
+  jumlah_santri: number
+  absensi: { hadir: number; sakit: number; izin: number; alpa: number; tingkat_kehadiran_persen: number }
+  disiplin: { pelanggaran: number; prestasi: number }
+  santri_butuh_perhatian: Array<{ id: string; nama_lengkap: string; alasan: string }>
+}
+
+interface SantriDrilldown {
+  id: string
+  nama_lengkap: string
+  absensi: { hadir: number; sakit: number; izin: number; alpa: number }
+  pelanggaran_per_kategori: Array<{ kategori_id: string | null; kategori_nama: string; jumlah: number }>
+  prestasi_per_jenis: Array<{ jenis_prestasi: string; jumlah: number }>
+  prestasi_total: number
+}
+
 const auth = useAuthStore()
 const summary = ref<DashboardSummary | null>(null)
 const loading = ref(true)
 const error = ref('')
+
+const waliKamarList = ref<WaliKamarSummary[]>([])
+const loadingWali = ref(true)
+const waliError = ref('')
+const selectedWaliId = ref('')
+const periodDari = ref('')
+const periodSampai = ref('')
+const drilldownSantri = ref<SantriDrilldown[]>([])
+const loadingDrilldown = ref(false)
+
+const selectedWali = computed(() => waliKamarList.value.find((w) => w.id === selectedWaliId.value) || null)
 
 const colorClasses: Record<string, { iconBg: string; iconText: string; value: string }> = {
   emerald: { iconBg: 'bg-emerald-50', iconText: 'text-emerald-600', value: 'text-emerald-700' },
@@ -61,7 +94,61 @@ async function loadSummary() {
   }
 }
 
-onMounted(loadSummary)
+async function loadDrilldown() {
+  if (!selectedWaliId.value) {
+    drilldownSantri.value = []
+    return
+  }
+  loadingDrilldown.value = true
+  try {
+    const res = await dashboardService.perWaliKamarSantri(selectedWaliId.value, {
+      dari: periodDari.value || undefined,
+      sampai: periodSampai.value || undefined
+    })
+    drilldownSantri.value = res.data.santri
+  } catch {
+    drilldownSantri.value = []
+  } finally {
+    loadingDrilldown.value = false
+  }
+}
+
+function selectWali(id: string) {
+  selectedWaliId.value = id
+  loadDrilldown()
+}
+
+async function loadWaliKamar() {
+  loadingWali.value = true
+  waliError.value = ''
+  try {
+    const params = periodDari.value && periodSampai.value
+      ? { dari: periodDari.value, sampai: periodSampai.value }
+      : undefined
+    const res = await dashboardService.perWaliKamar(params)
+    waliKamarList.value = res.data
+    periodDari.value = res.period.dari
+    periodSampai.value = res.period.sampai
+    if (!selectedWaliId.value || !waliKamarList.value.some((w) => w.id === selectedWaliId.value)) {
+      selectedWaliId.value = waliKamarList.value[0]?.id || ''
+    }
+    await loadDrilldown()
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    waliError.value = err?.response?.data?.message || 'Gagal memuat rekap wali kamar.'
+  } finally {
+    loadingWali.value = false
+  }
+}
+
+function applyPeriod() {
+  loadWaliKamar()
+}
+
+onMounted(() => {
+  loadSummary()
+  loadWaliKamar()
+})
 </script>
 
 <template>
@@ -230,6 +317,168 @@ onMounted(loadSummary)
           </ol>
         </section>
       </div>
+
+      <!-- Rekap per Wali Kamar -->
+      <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 class="text-base font-semibold text-slate-900">Rekap per Wali Kamar</h2>
+            <p class="text-xs text-slate-500 mt-0.5">Kehadiran, disiplin, dan santri yang butuh diperhatikan per wali kamar</p>
+          </div>
+          <div class="flex flex-wrap items-end gap-2">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600">Dari</label>
+              <input
+                v-model="periodDari"
+                type="date"
+                class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-slate-600">Sampai</label>
+              <input
+                v-model="periodSampai"
+                type="date"
+                class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+              />
+            </div>
+            <button
+              type="button"
+              @click="applyPeriod"
+              :disabled="loadingWali"
+              class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+            >Terapkan</button>
+          </div>
+        </div>
+
+        <div v-if="waliError" class="mx-5 mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{{ waliError }}</div>
+
+        <div v-if="loadingWali && !waliKamarList.length" class="space-y-2 p-5">
+          <div v-for="i in 3" :key="i" class="h-10 animate-pulse rounded-lg bg-slate-100"></div>
+        </div>
+
+        <template v-else-if="waliKamarList.length">
+          <!-- Tabs -->
+          <div class="flex gap-1 overflow-x-auto border-b border-slate-100 px-5 py-2">
+            <button
+              v-for="w in waliKamarList"
+              :key="w.id"
+              type="button"
+              @click="selectWali(w.id)"
+              class="shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition"
+              :class="selectedWaliId === w.id ? 'bg-emerald-100 text-emerald-800' : 'text-slate-500 hover:bg-slate-50'"
+            >{{ w.nama_lengkap }}</button>
+          </div>
+
+          <div v-if="selectedWali" class="space-y-5 p-5">
+            <!-- Kamar chips -->
+            <div class="flex flex-wrap items-center gap-2">
+              <span
+                v-for="k in selectedWali.assigned_kamar"
+                :key="k.id"
+                class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600"
+              >
+                {{ k.nama }}<span class="ml-1 text-slate-400">· {{ k.jenis_kelamin === 'P' ? 'Putri' : 'Putra' }}</span>
+              </span>
+              <span v-if="!selectedWali.assigned_kamar.length" class="text-xs italic text-slate-400">Belum ada kamar yang ditugaskan.</span>
+            </div>
+
+            <!-- Stat row -->
+            <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div class="rounded-lg border border-slate-200 p-3">
+                <p class="text-xs text-slate-500">Santri</p>
+                <p class="mt-1 text-xl font-bold text-slate-800">{{ selectedWali.jumlah_santri }}</p>
+              </div>
+              <div class="rounded-lg border border-slate-200 p-3">
+                <p class="text-xs text-slate-500">Tingkat Hadir</p>
+                <p class="mt-1 text-xl font-bold text-emerald-700">{{ selectedWali.absensi.tingkat_kehadiran_persen }}%</p>
+              </div>
+              <div class="rounded-lg border border-slate-200 p-3">
+                <p class="text-xs text-slate-500">Pelanggaran</p>
+                <p class="mt-1 text-xl font-bold text-rose-700">{{ selectedWali.disiplin.pelanggaran }}</p>
+              </div>
+              <div class="rounded-lg border border-slate-200 p-3">
+                <p class="text-xs text-slate-500">Prestasi</p>
+                <p class="mt-1 text-xl font-bold text-amber-700">{{ selectedWali.disiplin.prestasi }}</p>
+              </div>
+            </div>
+
+            <!-- Absensi breakdown -->
+            <div class="flex flex-wrap gap-4 text-sm">
+              <span class="text-emerald-700">Hadir {{ selectedWali.absensi.hadir }}</span>
+              <span class="text-amber-700">Sakit {{ selectedWali.absensi.sakit }}</span>
+              <span class="text-sky-700">Izin {{ selectedWali.absensi.izin }}</span>
+              <span class="text-rose-700">Alpa {{ selectedWali.absensi.alpa }}</span>
+              <span v-if="selectedWali.catatan_haid_tercatat !== null" class="text-slate-500">
+                Catatan Haid Tercatat: {{ selectedWali.catatan_haid_tercatat }}
+              </span>
+            </div>
+
+            <!-- Santri butuh perhatian -->
+            <div v-if="selectedWali.santri_butuh_perhatian.length" class="rounded-lg border border-rose-200 bg-rose-50 p-4">
+              <p class="text-sm font-semibold text-rose-800">⚠ Santri yang butuh diperhatikan</p>
+              <ul class="mt-2 space-y-1">
+                <li v-for="s in selectedWali.santri_butuh_perhatian" :key="s.id" class="text-sm text-rose-700">
+                  {{ s.nama_lengkap }} — <span class="text-rose-600">{{ s.alasan }}</span>
+                </li>
+              </ul>
+            </div>
+
+            <!-- Drilldown per santri -->
+            <div>
+              <h3 class="mb-2 text-sm font-semibold text-slate-700">Detail per Santri</h3>
+              <div v-if="loadingDrilldown" class="space-y-2">
+                <div v-for="i in 3" :key="i" class="h-10 animate-pulse rounded-lg bg-slate-100"></div>
+              </div>
+              <div v-else class="overflow-x-auto rounded-lg border border-slate-200">
+                <table class="min-w-full divide-y divide-slate-100 text-sm">
+                  <thead class="bg-slate-50">
+                    <tr>
+                      <th class="px-4 py-2 text-left font-semibold text-slate-600">Santri</th>
+                      <th class="px-4 py-2 text-center font-semibold text-slate-600">Hadir</th>
+                      <th class="px-4 py-2 text-center font-semibold text-slate-600">Sakit</th>
+                      <th class="px-4 py-2 text-center font-semibold text-slate-600">Izin</th>
+                      <th class="px-4 py-2 text-center font-semibold text-slate-600">Alpa</th>
+                      <th class="px-4 py-2 text-left font-semibold text-slate-600">Pelanggaran</th>
+                      <th class="px-4 py-2 text-left font-semibold text-slate-600">Prestasi</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-50">
+                    <tr v-for="s in drilldownSantri" :key="s.id" class="hover:bg-slate-50/60">
+                      <td class="px-4 py-2 font-medium text-slate-800">{{ s.nama_lengkap }}</td>
+                      <td class="px-4 py-2 text-center text-emerald-700">{{ s.absensi.hadir }}</td>
+                      <td class="px-4 py-2 text-center text-amber-700">{{ s.absensi.sakit }}</td>
+                      <td class="px-4 py-2 text-center text-sky-700">{{ s.absensi.izin }}</td>
+                      <td class="px-4 py-2 text-center text-rose-700">{{ s.absensi.alpa }}</td>
+                      <td class="px-4 py-2 text-slate-600">
+                        <span v-if="!s.pelanggaran_per_kategori.length" class="text-slate-300">—</span>
+                        <span
+                          v-for="(p, i) in s.pelanggaran_per_kategori"
+                          :key="(p.kategori_id ?? 'null') + i"
+                          class="mr-1 inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs text-rose-700"
+                        >{{ p.kategori_nama }} ×{{ p.jumlah }}</span>
+                      </td>
+                      <td class="px-4 py-2 text-slate-600">
+                        <span v-if="!s.prestasi_per_jenis.length" class="text-slate-300">—</span>
+                        <span
+                          v-for="(p, i) in s.prestasi_per_jenis"
+                          :key="p.jenis_prestasi + i"
+                          class="mr-1 inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700"
+                        >{{ p.jenis_prestasi }} ×{{ p.jumlah }}</span>
+                      </td>
+                    </tr>
+                    <tr v-if="!drilldownSantri.length">
+                      <td colspan="7" class="px-4 py-8 text-center text-slate-400">Belum ada santri aktif di kamar ini.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <div v-else class="p-10 text-center text-sm text-slate-400">Belum ada ustadz yang terdaftar.</div>
+      </section>
     </template>
   </div>
 </template>
