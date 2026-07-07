@@ -47,6 +47,11 @@ const router = createRouter({
           component: () => import('@/views/santri/SantriFormView.vue')
         },
         {
+          path: 'santri/import',
+          name: 'santri-import',
+          component: () => import('@/views/santri/SantriImportView.vue')
+        },
+        {
           path: 'santri/:id/edit',
           name: 'santri-edit',
           component: () => import('@/views/santri/SantriFormView.vue')

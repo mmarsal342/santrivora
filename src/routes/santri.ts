@@ -374,12 +374,17 @@ santri.post('/bulk', zValidator('json', bulkSchema), async (c) => {
 
   const results: Array<{ row: number; status: 'created' | 'error'; id?: string; error?: string }> = []
   const kelasCache = new Map<string, boolean>()
+  const kamarCache = new Map<string, boolean>()
 
   for (let row = 0; row < santriList.length; row++) {
     const s = santriList[row]
 
     if (user.role === 'ustadz' && s.kelas_id && !user.kelas_ids.includes(s.kelas_id)) {
       results.push({ row, status: 'error', error: 'KELAS_NOT_ASSIGNED' })
+      continue
+    }
+    if (user.role === 'ustadz' && s.kamar_id && !user.kamar_ids.includes(s.kamar_id)) {
+      results.push({ row, status: 'error', error: 'KAMAR_NOT_ASSIGNED' })
       continue
     }
 
@@ -398,14 +403,29 @@ santri.post('/bulk', zValidator('json', bulkSchema), async (c) => {
       }
     }
 
+    if (s.kamar_id) {
+      let kamarValid = kamarCache.get(s.kamar_id)
+      if (kamarValid === undefined) {
+        const kamar = await c.env.DB.prepare(
+          'SELECT id FROM kamar WHERE id = ? AND is_active = 1'
+        ).bind(s.kamar_id).first()
+        kamarValid = !!kamar
+        kamarCache.set(s.kamar_id, kamarValid)
+      }
+      if (!kamarValid) {
+        results.push({ row, status: 'error', error: 'KAMAR_NOT_FOUND' })
+        continue
+      }
+    }
+
     try {
       const id = crypto.randomUUID()
       await c.env.DB.prepare(
-        `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, angkatan, tanggal_masuk, tanggal_lahir, love_language)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, kamar_id, angkatan, tanggal_masuk, tanggal_lahir, love_language)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         id, s.nama_lengkap, s.jenis_kelamin,
-        s.kelas_id || null, s.angkatan || null, s.tanggal_masuk || null,
+        s.kelas_id || null, s.kamar_id || null, s.angkatan || null, s.tanggal_masuk || null,
         s.tanggal_lahir || null, s.love_language || null
       ).run()
       results.push({ row, status: 'created', id })
