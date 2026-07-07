@@ -1,11 +1,17 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { adminService, kelasService } from '@/services'
+import { adminService, kelasService, kamarService } from '@/services'
 
 interface Kelas {
   id: string
   nama: string
   tingkatan?: string
+}
+
+interface Kamar {
+  id: string
+  nama: string
+  jenis_kelamin: 'L' | 'P'
 }
 
 interface User {
@@ -15,6 +21,7 @@ interface User {
   role: 'admin' | 'ustadz'
   status: 'pending' | 'approved' | 'suspended'
   assigned_kelas?: Kelas[]
+  assigned_kamar?: Kamar[]
 }
 
 type TabStatus = 'pending' | 'approved' | 'suspended'
@@ -22,12 +29,17 @@ type TabStatus = 'pending' | 'approved' | 'suspended'
 const activeTab = ref<TabStatus>('pending')
 const users = ref<User[]>([])
 const kelasList = ref<Kelas[]>([])
+const kamarList = ref<Kamar[]>([])
 const loading = ref(false)
 const error = ref('')
 
 const approveTarget = ref<User | null>(null)
 const approveForm = reactive<{ kelas_ids: string[] }>({ kelas_ids: [] })
 const approveSubmitting = ref(false)
+
+const assignKamarTarget = ref<User | null>(null)
+const assignKamarForm = reactive<{ kamar_ids: string[] }>({ kamar_ids: [] })
+const assignKamarSubmitting = ref(false)
 
 const resetTarget = ref<User | null>(null)
 const resetForm = reactive({ new_password: '' })
@@ -44,6 +56,14 @@ async function fetchKelas() {
     kelasList.value = (await kelasService.list()) as Kelas[]
   } catch {
     kelasList.value = []
+  }
+}
+
+async function fetchKamar() {
+  try {
+    kamarList.value = (await kamarService.list()) as Kamar[]
+  } catch {
+    kamarList.value = []
   }
 }
 
@@ -131,8 +151,29 @@ function roleBadge(role: string) {
     : 'bg-blue-100 text-blue-800'
 }
 
+function openAssignKamar(u: User) {
+  assignKamarTarget.value = u
+  assignKamarForm.kamar_ids = u.assigned_kamar?.map((k) => k.id) ?? []
+}
+
+async function submitAssignKamar() {
+  if (!assignKamarTarget.value) return
+  assignKamarSubmitting.value = true
+  try {
+    await adminService.assignKamar(assignKamarTarget.value.id, assignKamarForm.kamar_ids)
+    assignKamarTarget.value = null
+    await fetchUsers()
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal mengatur wali kamar'
+  } finally {
+    assignKamarSubmitting.value = false
+  }
+}
+
 onMounted(() => {
   fetchKelas()
+  fetchKamar()
   fetchUsers()
 })
 </script>
@@ -200,11 +241,18 @@ onMounted(() => {
               </span>
             </div>
 
-            <div v-if="u.assigned_kelas && u.assigned_kelas.length > 0" class="mt-2 flex flex-wrap gap-1">
+            <div v-if="(u.assigned_kelas && u.assigned_kelas.length > 0) || (u.assigned_kamar && u.assigned_kamar.length > 0)" class="mt-2 flex flex-wrap gap-1">
               <span
                 v-for="k in u.assigned_kelas"
-                :key="k.id"
+                :key="'kelas-' + k.id"
                 class="inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700"
+              >
+                {{ k.nama }}
+              </span>
+              <span
+                v-for="k in u.assigned_kamar"
+                :key="'kamar-' + k.id"
+                class="inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs text-sky-700"
               >
                 {{ k.nama }}
               </span>
@@ -228,6 +276,14 @@ onMounted(() => {
                 class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
               >
                 Edit Kelas
+              </button>
+              <button
+                v-if="u.role === 'ustadz'"
+                type="button"
+                @click="openAssignKamar(u)"
+                class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
+              >
+                Atur Wali Kamar
               </button>
               <button
                 type="button"
@@ -308,6 +364,57 @@ onMounted(() => {
           <button
             type="button"
             @click="approveTarget = null"
+            class="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+          >
+            Batal
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="assignKamarTarget"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      @click.self="assignKamarTarget = null"
+    >
+      <div class="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <h2 class="mb-1 text-lg font-semibold text-gray-900">Atur Wali Kamar</h2>
+        <p class="mb-4 text-sm text-gray-500">
+          Pilih kamar untuk <strong>{{ assignKamarTarget.nama_lengkap }}</strong>
+        </p>
+        <div class="mb-4 max-h-60 space-y-2 overflow-y-auto">
+          <label
+            v-for="k in kamarList"
+            :key="k.id"
+            class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition hover:bg-gray-50"
+          >
+            <input
+              v-model="assignKamarForm.kamar_ids"
+              type="checkbox"
+              :value="k.id"
+              class="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+            />
+            <span class="text-sm text-gray-700">
+              {{ k.nama }}
+              <span class="text-gray-400">· {{ k.jenis_kelamin === 'P' ? 'Putri' : 'Putra' }}</span>
+            </span>
+          </label>
+          <p v-if="kamarList.length === 0" class="py-4 text-center text-sm text-gray-400">
+            Belum ada kamar tersedia
+          </p>
+        </div>
+        <div class="flex gap-3">
+          <button
+            type="button"
+            :disabled="assignKamarSubmitting"
+            @click="submitAssignKamar"
+            class="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {{ assignKamarSubmitting ? 'Memproses...' : 'Simpan' }}
+          </button>
+          <button
+            type="button"
+            @click="assignKamarTarget = null"
             class="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
           >
             Batal

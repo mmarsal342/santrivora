@@ -68,6 +68,17 @@ const router = createRouter({
           meta: { adminOnly: true }
         },
         {
+          path: 'kamar',
+          name: 'kamar',
+          component: () => import('@/views/kamar/KamarListView.vue'),
+          meta: { adminOnly: true }
+        },
+        {
+          path: 'kegiatan',
+          name: 'kegiatan',
+          component: () => import('@/views/kegiatan/KegiatanListView.vue')
+        },
+        {
           path: 'kategori',
           name: 'kategori',
           component: () => import('@/views/kategori/KategoriListView.vue'),

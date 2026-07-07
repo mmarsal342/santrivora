@@ -1,11 +1,17 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { santriService, kelasService } from '@/services'
+import { santriService, kelasService, kamarService } from '@/services'
 
 interface Kelas {
   id: string
   nama: string
+}
+
+interface Kamar {
+  id: string
+  nama: string
+  jenis_kelamin: 'L' | 'P'
 }
 
 const route = useRoute()
@@ -15,6 +21,7 @@ const isEdit = computed(() => route.name === 'santri-edit')
 const editId = computed(() => (route.params.id ? String(route.params.id) : ''))
 
 const kelasOptions = ref<Kelas[]>([])
+const kamarOptions = ref<Kamar[]>([])
 const loading = ref(false)
 const submitting = ref(false)
 const serverError = ref('')
@@ -23,10 +30,15 @@ const form = reactive({
   nama_lengkap: '',
   jenis_kelamin: 'L' as 'L' | 'P',
   kelas_id: '',
+  kamar_id: '',
   angkatan: '',
   tanggal_masuk: '',
+  tanggal_lahir: '',
+  love_language: '',
   status: 'aktif',
 })
+
+const kamarOptionsForGender = computed(() => kamarOptions.value.filter((k) => k.jenis_kelamin === form.jenis_kelamin))
 
 const errors = reactive<Record<string, string>>({
   nama_lengkap: '',
@@ -70,6 +82,14 @@ async function loadKelas() {
   }
 }
 
+async function loadKamar() {
+  try {
+    kamarOptions.value = (await kamarService.list()) as Kamar[]
+  } catch {
+    kamarOptions.value = []
+  }
+}
+
 async function loadSantri() {
   if (!isEdit.value) {
     form.tanggal_masuk = today
@@ -80,9 +100,12 @@ async function loadSantri() {
     const s = await santriService.get(editId.value)
     form.nama_lengkap = s.nama_lengkap ?? ''
     form.jenis_kelamin = (s.jenis_kelamin as 'L' | 'P') ?? 'L'
-    form.kelas_id = s.kelas?.id ?? ''
+    form.kelas_id = s.kelas?.id ?? s.kelas_id ?? ''
+    form.kamar_id = s.kamar_id ?? ''
     form.angkatan = s.angkatan != null ? String(s.angkatan) : ''
     form.tanggal_masuk = s.tanggal_masuk ? s.tanggal_masuk.slice(0, 10) : ''
+    form.tanggal_lahir = s.tanggal_lahir ? s.tanggal_lahir.slice(0, 10) : ''
+    form.love_language = s.love_language ?? ''
     form.status = s.status ?? 'aktif'
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
@@ -103,7 +126,10 @@ async function submit() {
     status: form.status,
   }
   if (form.kelas_id) payload.kelas_id = form.kelas_id
+  if (form.kamar_id) payload.kamar_id = form.kamar_id
   if (form.angkatan.trim()) payload.angkatan = form.angkatan.trim()
+  if (form.tanggal_lahir) payload.tanggal_lahir = form.tanggal_lahir
+  if (form.love_language.trim()) payload.love_language = form.love_language.trim()
 
   submitting.value = true
   try {
@@ -131,7 +157,7 @@ async function submit() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadKelas(), loadSantri()])
+  await Promise.all([loadKelas(), loadKamar(), loadSantri()])
 })
 </script>
 
@@ -217,17 +243,30 @@ onMounted(async () => {
         <p v-if="errors.jenis_kelamin" class="mt-1 text-xs text-rose-600">{{ errors.jenis_kelamin }}</p>
       </div>
 
-      <!-- Kelas -->
-      <div>
-        <label for="kelas_id" class="mb-1.5 block text-sm font-medium text-slate-700">Kelas</label>
-        <select
-          id="kelas_id"
-          v-model="form.kelas_id"
-          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 bg-white"
-        >
-          <option value="">Tanpa kelas</option>
-          <option v-for="k in kelasOptions" :key="k.id" :value="k.id">{{ k.nama }}</option>
-        </select>
+      <!-- Kelas & Kamar -->
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label for="kelas_id" class="mb-1.5 block text-sm font-medium text-slate-700">Kelas</label>
+          <select
+            id="kelas_id"
+            v-model="form.kelas_id"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 bg-white"
+          >
+            <option value="">Tanpa kelas</option>
+            <option v-for="k in kelasOptions" :key="k.id" :value="k.id">{{ k.nama }}</option>
+          </select>
+        </div>
+        <div>
+          <label for="kamar_id" class="mb-1.5 block text-sm font-medium text-slate-700">Kamar</label>
+          <select
+            id="kamar_id"
+            v-model="form.kamar_id"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 bg-white"
+          >
+            <option value="">Tanpa kamar</option>
+            <option v-for="k in kamarOptionsForGender" :key="k.id" :value="k.id">{{ k.nama }}</option>
+          </select>
+        </div>
       </div>
 
       <!-- Angkatan & Tanggal masuk -->
@@ -255,6 +294,29 @@ onMounted(async () => {
             :class="errors.tanggal_masuk ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-500/20' : 'border-slate-300 focus:border-emerald-500 focus:ring-emerald-500/20'"
           />
           <p v-if="errors.tanggal_masuk" class="mt-1 text-xs text-rose-600">{{ errors.tanggal_masuk }}</p>
+        </div>
+      </div>
+
+      <!-- Tanggal lahir & Love language -->
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label for="tanggal_lahir" class="mb-1.5 block text-sm font-medium text-slate-700">Tanggal Lahir</label>
+          <input
+            id="tanggal_lahir"
+            v-model="form.tanggal_lahir"
+            type="date"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+          />
+        </div>
+        <div>
+          <label for="love_language" class="mb-1.5 block text-sm font-medium text-slate-700">Love Language</label>
+          <input
+            id="love_language"
+            v-model="form.love_language"
+            type="text"
+            placeholder="Opsional, mis. Words of Affirmation"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+          />
         </div>
       </div>
 

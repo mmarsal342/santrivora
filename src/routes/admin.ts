@@ -46,11 +46,47 @@ admin.get('/users', async (c) => {
 
   query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
 
-  const users = await c.env.DB.prepare(query).bind(...params, limit, offset).all()
+  const users = await c.env.DB.prepare(query).bind(...params, limit, offset).all<{ id: string }>()
   const total = await c.env.DB.prepare(countQuery).bind(...params).first<{ total: number }>()
 
+  const userRows = users.results || []
+  const userIds = userRows.map((u) => u.id)
+
+  const kelasMap = new Map<string, Array<{ id: string; nama: string; tingkatan: string | null }>>()
+  const kamarMap = new Map<string, Array<{ id: string; nama: string; jenis_kelamin: string }>>()
+
+  if (userIds.length > 0) {
+    const ph = userIds.map(() => '?').join(',')
+    const [kelasRows, kamarRows] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT uk.user_id, k.id, k.nama, k.tingkatan
+         FROM ustadz_kelas uk JOIN kelas k ON uk.kelas_id = k.id
+         WHERE uk.user_id IN (${ph})`
+      ).bind(...userIds).all<{ user_id: string; id: string; nama: string; tingkatan: string | null }>(),
+      c.env.DB.prepare(
+        `SELECT uk.user_id, k.id, k.nama, k.jenis_kelamin
+         FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id
+         WHERE uk.user_id IN (${ph})`
+      ).bind(...userIds).all<{ user_id: string; id: string; nama: string; jenis_kelamin: string }>()
+    ])
+    for (const row of kelasRows.results || []) {
+      if (!kelasMap.has(row.user_id)) kelasMap.set(row.user_id, [])
+      kelasMap.get(row.user_id)!.push({ id: row.id, nama: row.nama, tingkatan: row.tingkatan })
+    }
+    for (const row of kamarRows.results || []) {
+      if (!kamarMap.has(row.user_id)) kamarMap.set(row.user_id, [])
+      kamarMap.get(row.user_id)!.push({ id: row.id, nama: row.nama, jenis_kelamin: row.jenis_kelamin })
+    }
+  }
+
+  const data = userRows.map((u) => ({
+    ...u,
+    assigned_kelas: kelasMap.get(u.id) || [],
+    assigned_kamar: kamarMap.get(u.id) || []
+  }))
+
   return c.json({
-    data: users.results,
+    data,
     pagination: {
       page,
       limit,
