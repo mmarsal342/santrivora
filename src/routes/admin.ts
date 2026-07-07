@@ -10,11 +10,7 @@ const admin = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
 admin.use('*', authMiddleware, requireRole('admin'))
 
 const approveSchema = z.object({
-  kelas_ids: z.array(z.string().uuid()).min(1, 'Minimal 1 kelas harus diassign')
-})
-
-const assignKamarSchema = z.object({
-  kamar_ids: z.array(z.string().uuid())
+  kamar_ids: z.array(z.string().uuid()).min(1, 'Minimal 1 kamar harus diassign')
 })
 
 const resetPasswordSchema = z.object({
@@ -133,77 +129,11 @@ admin.get('/users/:id', async (c) => {
   })
 })
 
-// POST /api/admin/users/:id/assign-kamar — set wali kamar assignment (replaces existing)
-admin.post('/users/:id/assign-kamar', zValidator('json', assignKamarSchema), async (c) => {
-  const userId = c.req.param('id')
-  const { kamar_ids } = c.req.valid('json')
-  const adminUser = c.get('user')
-
-  const user = await c.env.DB.prepare(
-    'SELECT id, role FROM users WHERE id = ?'
-  ).bind(userId).first<{ id: string; role: string }>()
-
-  if (!user) {
-    return c.json({
-      error: 'Not Found',
-      code: 'USER_NOT_FOUND',
-      message: 'User tidak ditemukan.'
-    } as ApiError, 404)
-  }
-
-  if (user.role !== 'ustadz') {
-    return c.json({
-      error: 'Bad Request',
-      code: 'INVALID_ROLE',
-      message: 'Hanya ustadz/ustadzah yang dapat menjadi wali kamar.'
-    } as ApiError, 400)
-  }
-
-  if (kamar_ids.length > 0) {
-    const placeholders = kamar_ids.map(() => '?').join(',')
-    const validKamar = await c.env.DB.prepare(
-      `SELECT id FROM kamar WHERE id IN (${placeholders}) AND is_active = 1`
-    ).bind(...kamar_ids).all()
-
-    if (validKamar.results.length !== kamar_ids.length) {
-      return c.json({
-        error: 'Bad Request',
-        code: 'INVALID_KAMAR',
-        message: 'Beberapa kamar tidak ditemukan atau tidak aktif.'
-      } as ApiError, 400)
-    }
-  }
-
-  await c.env.DB.prepare('DELETE FROM ustadz_kamar WHERE user_id = ?').bind(userId).run()
-
-  if (kamar_ids.length > 0) {
-    const stmt = c.env.DB.prepare(
-      'INSERT INTO ustadz_kamar (user_id, kamar_id) VALUES (?, ?)'
-    )
-    const batch = kamar_ids.map((kamarId) => stmt.bind(userId, kamarId))
-    await c.env.DB.batch(batch)
-  }
-
-  await c.env.DB.prepare(
-    `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
-     VALUES (?, ?, 'user.assign_kamar', 'users', ?, ?)`
-  ).bind(
-    crypto.randomUUID(),
-    adminUser.sub,
-    userId,
-    JSON.stringify({ kamar_ids })
-  ).run()
-
-  return c.json({
-    message: 'Wali kamar berhasil diperbarui.',
-    data: { id: userId, kamar_ids }
-  })
-})
-
-// POST /api/admin/users/:id/approve — approve + assign kelas
+// POST /api/admin/users/:id/approve — approve (idempotent) + assign wali kamar.
+// Dipanggil juga buat edit kamar user yang sudah approved, jadi gak ada endpoint terpisah.
 admin.post('/users/:id/approve', zValidator('json', approveSchema), async (c) => {
   const userId = c.req.param('id')
-  const { kelas_ids } = c.req.valid('json')
+  const { kamar_ids } = c.req.valid('json')
   const adminUser = c.get('user')
 
   const user = await c.env.DB.prepare(
@@ -218,40 +148,32 @@ admin.post('/users/:id/approve', zValidator('json', approveSchema), async (c) =>
     } as ApiError, 404)
   }
 
-  if (user.status === 'approved') {
+  // Validate kamar exist
+  const placeholders = kamar_ids.map(() => '?').join(',')
+  const validKamar = await c.env.DB.prepare(
+    `SELECT id FROM kamar WHERE id IN (${placeholders}) AND is_active = 1`
+  ).bind(...kamar_ids).all()
+
+  if (validKamar.results.length !== kamar_ids.length) {
     return c.json({
       error: 'Bad Request',
-      code: 'ALREADY_APPROVED',
-      message: 'User sudah berstatus approved.'
+      code: 'INVALID_KAMAR',
+      message: 'Beberapa kamar tidak ditemukan atau tidak aktif.'
     } as ApiError, 400)
   }
 
-  // Validate kelas exist
-  const placeholders = kelas_ids.map(() => '?').join(',')
-  const validKelas = await c.env.DB.prepare(
-    `SELECT id FROM kelas WHERE id IN (${placeholders}) AND is_active = 1`
-  ).bind(...kelas_ids).all()
-
-  if (validKelas.results.length !== kelas_ids.length) {
-    return c.json({
-      error: 'Bad Request',
-      code: 'INVALID_KELAS',
-      message: 'Beberapa kelas tidak ditemukan atau tidak aktif.'
-    } as ApiError, 400)
-  }
-
-  // Update user status
+  // Update user status (no-op kalau sudah approved)
   await c.env.DB.prepare(
     `UPDATE users SET status = 'approved', updated_at = datetime('now') WHERE id = ?`
   ).bind(userId).run()
 
-  // Assign kelas (delete old + insert new)
-  await c.env.DB.prepare('DELETE FROM ustadz_kelas WHERE user_id = ?').bind(userId).run()
+  // Assign kamar (delete old + insert new)
+  await c.env.DB.prepare('DELETE FROM ustadz_kamar WHERE user_id = ?').bind(userId).run()
 
   const stmt = c.env.DB.prepare(
-    'INSERT INTO ustadz_kelas (user_id, kelas_id) VALUES (?, ?)'
+    'INSERT INTO ustadz_kamar (user_id, kamar_id) VALUES (?, ?)'
   )
-  const batch = kelas_ids.map((kelasId) => stmt.bind(userId, kelasId))
+  const batch = kamar_ids.map((kamarId) => stmt.bind(userId, kamarId))
   await c.env.DB.batch(batch)
 
   // Audit log
@@ -262,12 +184,12 @@ admin.post('/users/:id/approve', zValidator('json', approveSchema), async (c) =>
     crypto.randomUUID(),
     adminUser.sub,
     userId,
-    JSON.stringify({ status: 'approved', kelas_ids })
+    JSON.stringify({ status: 'approved', kamar_ids })
   ).run()
 
   return c.json({
-    message: 'User berhasil diaktifkan dan kelas telah diassign.',
-    data: { id: userId, status: 'approved', kelas_ids }
+    message: 'User berhasil diaktifkan dan wali kamar telah diassign.',
+    data: { id: userId, status: 'approved', kamar_ids }
   })
 })
 

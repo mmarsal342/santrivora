@@ -44,8 +44,8 @@ export const adminService = {
     return response.data.data
   },
 
-  async approveUser(id: string, kelasIds: string[]) {
-    const response = await api.post(`/admin/users/${id}/approve`, { kelas_ids: kelasIds })
+  async approveUser(id: string, kamarIds: string[]) {
+    const response = await api.post(`/admin/users/${id}/approve`, { kamar_ids: kamarIds })
     return response.data
   },
 
@@ -61,11 +61,6 @@ export const adminService = {
 
   async resetPassword(id: string, newPassword: string) {
     const response = await api.post(`/admin/users/${id}/reset-password`, { new_password: newPassword })
-    return response.data
-  },
-
-  async assignKamar(id: string, kamarIds: string[]) {
-    const response = await api.post(`/admin/users/${id}/assign-kamar`, { kamar_ids: kamarIds })
     return response.data
   },
 
