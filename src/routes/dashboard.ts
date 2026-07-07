@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { authMiddleware, requireRole } from '../middleware/auth'
-import type { Env, UserPayload } from '../types'
+import type { ApiError, Env, UserPayload } from '../types'
 
 const dashboard = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
 
@@ -73,7 +73,7 @@ dashboard.get('/summary', requireRole('admin'), async (c) => {
         pelanggaran_30hari: totalPelanggaran?.count || 0,
         prestasi_30hari: totalPrestasi?.count || 0
       },
-      per_kategori: perKelas.results,
+      per_kategori: perKategori.results,
       per_kelas: perKelas.results,
       top_pelanggar: topPelanggar.results
     }
@@ -105,6 +105,212 @@ dashboard.get('/trends', requireRole('admin'), async (c) => {
       trends: trends.results
     }
   })
+})
+
+function defaultDateRange(c: { req: { query: (k: string) => string | undefined } }) {
+  const now = new Date()
+  const sampaiDefault = now.toISOString().slice(0, 10)
+  const dariDefault = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const dari = c.req.query('dari') || dariDefault
+  const sampai = c.req.query('sampai') || sampaiDefault
+  return { dari, sampai }
+}
+
+// Rekap absensi + disiplin + flag "butuh diperhatikan" untuk sekumpulan kelas
+async function computeKelasStats(env: Env, kelasIds: string[], dari: string, sampai: string) {
+  if (kelasIds.length === 0) {
+    return {
+      jumlah_santri: 0,
+      absensi: { hadir: 0, sakit: 0, izin: 0, alpa: 0, tingkat_kehadiran_persen: 0 },
+      disiplin: { pelanggaran: 0, prestasi: 0 },
+      santri_butuh_perhatian: [] as Array<{ id: string; nama_lengkap: string; alasan: string }>
+    }
+  }
+
+  const ph = kelasIds.map(() => '?').join(',')
+
+  const santriCount = await env.DB.prepare(
+    `SELECT COUNT(*) as count FROM santri WHERE kelas_id IN (${ph}) AND status = 'aktif'`
+  ).bind(...kelasIds).first<{ count: number }>()
+
+  const absensiRows = await env.DB.prepare(`
+    SELECT a.status, COUNT(*) as jumlah
+    FROM absensi a
+    INNER JOIN santri s ON a.santri_id = s.id
+    WHERE s.kelas_id IN (${ph}) AND a.tanggal BETWEEN ? AND ?
+    GROUP BY a.status
+  `).bind(...kelasIds, dari, sampai).all<{ status: string; jumlah: number }>()
+
+  const absensi = { hadir: 0, sakit: 0, izin: 0, alpa: 0 } as Record<string, number>
+  for (const row of absensiRows.results || []) {
+    if (row.status in absensi) absensi[row.status] = row.jumlah
+  }
+  const totalAbsensi = absensi.hadir + absensi.sakit + absensi.izin + absensi.alpa
+  const tingkatKehadiran = totalAbsensi > 0 ? Math.round((absensi.hadir / totalAbsensi) * 1000) / 10 : 0
+
+  const disiplinRows = await env.DB.prepare(`
+    SELECT cd.tipe, COUNT(*) as jumlah
+    FROM catatan_disiplin cd
+    INNER JOIN santri s ON cd.santri_id = s.id
+    WHERE s.kelas_id IN (${ph}) AND cd.is_deleted = 0
+      AND date(cd.tanggal_kejadian) BETWEEN ? AND ?
+    GROUP BY cd.tipe
+  `).bind(...kelasIds, dari, sampai).all<{ tipe: string; jumlah: number }>()
+
+  const disiplin = { pelanggaran: 0, prestasi: 0 } as Record<string, number>
+  for (const row of disiplinRows.results || []) {
+    if (row.tipe in disiplin) disiplin[row.tipe] = row.jumlah
+  }
+
+  // Flag: santri alpa 3x atau lebih dalam periode ini
+  const alpaRows = await env.DB.prepare(`
+    SELECT s.id, s.nama_lengkap, COUNT(*) as jumlah_alpa
+    FROM absensi a
+    INNER JOIN santri s ON a.santri_id = s.id
+    WHERE s.kelas_id IN (${ph}) AND a.status = 'alpa' AND a.tanggal BETWEEN ? AND ?
+    GROUP BY s.id
+    HAVING COUNT(*) >= 3
+    ORDER BY jumlah_alpa DESC
+  `).bind(...kelasIds, dari, sampai).all<{ id: string; nama_lengkap: string; jumlah_alpa: number }>()
+
+  const santriButuhPerhatian = (alpaRows.results || []).map((r) => ({
+    id: r.id,
+    nama_lengkap: r.nama_lengkap,
+    alasan: `Alpa ${r.jumlah_alpa}x dalam periode ini`
+  }))
+
+  return {
+    jumlah_santri: santriCount?.count || 0,
+    absensi: { ...absensi, tingkat_kehadiran_persen: tingkatKehadiran } as {
+      hadir: number; sakit: number; izin: number; alpa: number; tingkat_kehadiran_persen: number
+    },
+    disiplin: disiplin as { pelanggaran: number; prestasi: number },
+    santri_butuh_perhatian: santriButuhPerhatian
+  }
+}
+
+// GET /api/dashboard/per-ustadz?dari=&sampai= — ringkasan tiap ustadz (buat tab-tab di UI)
+dashboard.get('/per-ustadz', requireRole('admin'), async (c) => {
+  const { dari, sampai } = defaultDateRange(c)
+
+  const ustadzList = await c.env.DB.prepare(
+    `SELECT id, email, nama_lengkap, status FROM users WHERE role = 'ustadz' ORDER BY nama_lengkap ASC`
+  ).all<{ id: string; email: string; nama_lengkap: string; status: string }>()
+
+  const data = []
+  for (const u of ustadzList.results || []) {
+    const kelasAssignments = await c.env.DB.prepare(
+      `SELECT k.id, k.nama FROM ustadz_kelas uk JOIN kelas k ON uk.kelas_id = k.id WHERE uk.user_id = ? AND k.is_active = 1`
+    ).bind(u.id).all<{ id: string; nama: string }>()
+    const kelasIds = (kelasAssignments.results || []).map((k) => k.id)
+
+    const stats = await computeKelasStats(c.env, kelasIds, dari, sampai)
+
+    data.push({
+      id: u.id,
+      nama_lengkap: u.nama_lengkap,
+      email: u.email,
+      status: u.status,
+      assigned_kelas: kelasAssignments.results || [],
+      ...stats
+    })
+  }
+
+  return c.json({ data, period: { dari, sampai } })
+})
+
+// GET /api/dashboard/per-ustadz/:userId/santri?dari=&sampai= — drill-down per santri
+dashboard.get('/per-ustadz/:userId/santri', requireRole('admin'), async (c) => {
+  const userId = c.req.param('userId')
+  const { dari, sampai } = defaultDateRange(c)
+
+  const ustadz = await c.env.DB.prepare(
+    `SELECT id, nama_lengkap FROM users WHERE id = ? AND role = 'ustadz'`
+  ).bind(userId).first<{ id: string; nama_lengkap: string }>()
+
+  if (!ustadz) {
+    return c.json({
+      error: 'Not Found',
+      code: 'USTADZ_NOT_FOUND',
+      message: 'Ustadz tidak ditemukan.'
+    } as ApiError, 404)
+  }
+
+  const kelasAssignments = await c.env.DB.prepare(
+    `SELECT kelas_id FROM ustadz_kelas WHERE user_id = ?`
+  ).bind(userId).all<{ kelas_id: string }>()
+  const kelasIds = (kelasAssignments.results || []).map((r) => r.kelas_id)
+
+  if (kelasIds.length === 0) {
+    return c.json({ data: { ustadz, santri: [] }, period: { dari, sampai } })
+  }
+
+  const ph = kelasIds.map(() => '?').join(',')
+  const santriList = await c.env.DB.prepare(
+    `SELECT id, nama_lengkap FROM santri WHERE kelas_id IN (${ph}) AND status = 'aktif' ORDER BY nama_lengkap ASC`
+  ).bind(...kelasIds).all<{ id: string; nama_lengkap: string }>()
+
+  const santriIds = (santriList.results || []).map((s) => s.id)
+  if (santriIds.length === 0) {
+    return c.json({ data: { ustadz, santri: [] }, period: { dari, sampai } })
+  }
+  const sph = santriIds.map(() => '?').join(',')
+
+  const [absensiRows, pelanggaranRows, prestasiRows] = await Promise.all([
+    c.env.DB.prepare(`
+      SELECT santri_id, status, COUNT(*) as jumlah FROM absensi
+      WHERE santri_id IN (${sph}) AND tanggal BETWEEN ? AND ?
+      GROUP BY santri_id, status
+    `).bind(...santriIds, dari, sampai).all<{ santri_id: string; status: string; jumlah: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT cd.santri_id, kp.id as kategori_id, kp.nama as kategori_nama, COUNT(*) as jumlah
+      FROM catatan_disiplin cd
+      LEFT JOIN kategori_pelanggaran kp ON cd.kategori_id = kp.id
+      WHERE cd.santri_id IN (${sph}) AND cd.tipe = 'pelanggaran' AND cd.is_deleted = 0
+        AND date(cd.tanggal_kejadian) BETWEEN ? AND ?
+      GROUP BY cd.santri_id, kp.id
+    `).bind(...santriIds, dari, sampai).all<{ santri_id: string; kategori_id: string | null; kategori_nama: string | null; jumlah: number }>(),
+
+    c.env.DB.prepare(`
+      SELECT santri_id, COUNT(*) as jumlah FROM catatan_disiplin
+      WHERE santri_id IN (${sph}) AND tipe = 'prestasi' AND is_deleted = 0
+        AND date(tanggal_kejadian) BETWEEN ? AND ?
+      GROUP BY santri_id
+    `).bind(...santriIds, dari, sampai).all<{ santri_id: string; jumlah: number }>()
+  ])
+
+  const absensiMap = new Map<string, Record<string, number>>()
+  for (const row of absensiRows.results || []) {
+    if (!absensiMap.has(row.santri_id)) absensiMap.set(row.santri_id, { hadir: 0, sakit: 0, izin: 0, alpa: 0 })
+    const entry = absensiMap.get(row.santri_id)!
+    if (row.status in entry) entry[row.status] = row.jumlah
+  }
+
+  const pelanggaranMap = new Map<string, Array<{ kategori_id: string | null; kategori_nama: string; jumlah: number }>>()
+  for (const row of pelanggaranRows.results || []) {
+    if (!pelanggaranMap.has(row.santri_id)) pelanggaranMap.set(row.santri_id, [])
+    pelanggaranMap.get(row.santri_id)!.push({
+      kategori_id: row.kategori_id,
+      kategori_nama: row.kategori_nama || 'Tanpa kategori',
+      jumlah: row.jumlah
+    })
+  }
+
+  const prestasiMap = new Map<string, number>()
+  for (const row of prestasiRows.results || []) {
+    prestasiMap.set(row.santri_id, row.jumlah)
+  }
+
+  const santri = (santriList.results || []).map((s) => ({
+    id: s.id,
+    nama_lengkap: s.nama_lengkap,
+    absensi: absensiMap.get(s.id) || { hadir: 0, sakit: 0, izin: 0, alpa: 0 },
+    pelanggaran_per_kategori: pelanggaranMap.get(s.id) || [],
+    prestasi: prestasiMap.get(s.id) || 0
+  }))
+
+  return c.json({ data: { ustadz, santri }, period: { dari, sampai } })
 })
 
 export { dashboard as dashboardRoutes }
