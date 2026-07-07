@@ -25,7 +25,9 @@ const updateSchema = z.object({
   keterangan: z.string().max(500).nullable().optional()
 })
 
-// POST /api/absensi/bulk — tandai kehadiran sekelas/kegiatan sekaligus
+// POST /api/absensi/bulk — tandai kehadiran sekamar/kegiatan sekaligus
+// Absensi ini berbasis KAMAR (wali kamar), bukan kelas — kelas dipertahankan
+// khusus buat catatan disiplin akademik (lihat routes/catatan.ts).
 absensi.post('/bulk', zValidator('json', bulkSchema), async (c) => {
   const { tanggal, kegiatan_id, items } = c.req.valid('json')
   const user = c.get('user')
@@ -47,16 +49,16 @@ absensi.post('/bulk', zValidator('json', bulkSchema), async (c) => {
 
   for (const item of items) {
     const santri = await c.env.DB.prepare(
-      'SELECT id, kelas_id FROM santri WHERE id = ?'
-    ).bind(item.santri_id).first<{ id: string; kelas_id: string | null }>()
+      'SELECT id, kamar_id FROM santri WHERE id = ?'
+    ).bind(item.santri_id).first<{ id: string; kamar_id: string | null }>()
 
     if (!santri) {
       results.push({ santri_id: item.santri_id, status: 'error', error: 'SANTRI_NOT_FOUND' })
       continue
     }
 
-    if (user.role === 'ustadz' && santri.kelas_id && !user.kelas_ids.includes(santri.kelas_id)) {
-      results.push({ santri_id: item.santri_id, status: 'error', error: 'KELAS_NOT_ASSIGNED' })
+    if (user.role === 'ustadz' && santri.kamar_id && !user.kamar_ids.includes(santri.kamar_id)) {
+      results.push({ santri_id: item.santri_id, status: 'error', error: 'KAMAR_NOT_ASSIGNED' })
       continue
     }
 
@@ -96,37 +98,37 @@ absensi.post('/bulk', zValidator('json', bulkSchema), async (c) => {
   })
 })
 
-// GET /api/absensi — scoped by role, filter by santri_id/kelas_id/tanggal/rentang/kegiatan_id
+// GET /api/absensi — scoped by role (kamar), filter by santri_id/kamar_id/tanggal/rentang/kegiatan_id
 absensi.get('/', async (c) => {
   const user = c.get('user')
-  const { santri_id, kelas_id, tanggal, dari, sampai, kegiatan_id, cursor, limit } = c.req.query()
+  const { santri_id, kamar_id, tanggal, dari, sampai, kegiatan_id, cursor, limit } = c.req.query()
 
   const conditions: string[] = []
   const params: unknown[] = []
 
   if (user.role === 'ustadz') {
-    if (user.kelas_ids.length === 0) {
+    if (user.kamar_ids.length === 0) {
       return c.json({ data: [], pagination: { cursor: null, hasMore: false } })
     }
-    const ph = user.kelas_ids.map(() => '?').join(',')
-    conditions.push(`s.kelas_id IN (${ph})`)
-    params.push(...user.kelas_ids)
+    const ph = user.kamar_ids.map(() => '?').join(',')
+    conditions.push(`s.kamar_id IN (${ph})`)
+    params.push(...user.kamar_ids)
   }
 
   if (santri_id) {
     conditions.push('a.santri_id = ?')
     params.push(santri_id)
   }
-  if (kelas_id) {
-    if (user.role === 'ustadz' && !user.kelas_ids.includes(kelas_id)) {
+  if (kamar_id) {
+    if (user.role === 'ustadz' && !user.kamar_ids.includes(kamar_id)) {
       return c.json({
         error: 'Forbidden',
-        code: 'KELAS_NOT_ASSIGNED',
-        message: 'Anda tidak mengajar kelas ini.'
+        code: 'KAMAR_NOT_ASSIGNED',
+        message: 'Anda bukan wali kamar ini.'
       } as ApiError, 403)
     }
-    conditions.push('s.kelas_id = ?')
-    params.push(kelas_id)
+    conditions.push('s.kamar_id = ?')
+    params.push(kamar_id)
   }
   if (tanggal) {
     conditions.push('a.tanggal = ?')
@@ -148,7 +150,7 @@ absensi.get('/', async (c) => {
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
   const query = `
-    SELECT a.*, s.nama_lengkap as santri_nama, s.kelas_id, g.nama as kegiatan_nama
+    SELECT a.*, s.nama_lengkap as santri_nama, s.kamar_id, g.nama as kegiatan_nama
     FROM absensi a
     INNER JOIN santri s ON a.santri_id = s.id
     LEFT JOIN kegiatan g ON a.kegiatan_id = g.id
@@ -170,7 +172,7 @@ absensi.get('/', async (c) => {
 // GET /api/absensi/rekap — rekap jumlah per status, untuk dashboard
 absensi.get('/rekap', async (c) => {
   const user = c.get('user')
-  const { kelas_id, dari, sampai } = c.req.query()
+  const { kamar_id, dari, sampai } = c.req.query()
 
   if (!dari || !sampai) {
     return c.json({
@@ -184,24 +186,24 @@ absensi.get('/rekap', async (c) => {
   const params: unknown[] = [dari, sampai]
 
   if (user.role === 'ustadz') {
-    if (user.kelas_ids.length === 0) {
+    if (user.kamar_ids.length === 0) {
       return c.json({ data: [] })
     }
-    const ph = user.kelas_ids.map(() => '?').join(',')
-    conditions.push(`s.kelas_id IN (${ph})`)
-    params.push(...user.kelas_ids)
+    const ph = user.kamar_ids.map(() => '?').join(',')
+    conditions.push(`s.kamar_id IN (${ph})`)
+    params.push(...user.kamar_ids)
   }
 
-  if (kelas_id) {
-    if (user.role === 'ustadz' && !user.kelas_ids.includes(kelas_id)) {
+  if (kamar_id) {
+    if (user.role === 'ustadz' && !user.kamar_ids.includes(kamar_id)) {
       return c.json({
         error: 'Forbidden',
-        code: 'KELAS_NOT_ASSIGNED',
-        message: 'Anda tidak mengajar kelas ini.'
+        code: 'KAMAR_NOT_ASSIGNED',
+        message: 'Anda bukan wali kamar ini.'
       } as ApiError, 403)
     }
-    conditions.push('s.kelas_id = ?')
-    params.push(kelas_id)
+    conditions.push('s.kamar_id = ?')
+    params.push(kamar_id)
   }
 
   const query = `
@@ -222,11 +224,11 @@ absensi.put('/:id', zValidator('json', updateSchema), async (c) => {
   const user = c.get('user')
 
   const existing = await c.env.DB.prepare(`
-    SELECT a.*, s.kelas_id
+    SELECT a.*, s.kamar_id
     FROM absensi a
     INNER JOIN santri s ON a.santri_id = s.id
     WHERE a.id = ?
-  `).bind(id).first<{ kelas_id: string | null }>()
+  `).bind(id).first<{ kamar_id: string | null }>()
 
   if (!existing) {
     return c.json({
@@ -236,10 +238,10 @@ absensi.put('/:id', zValidator('json', updateSchema), async (c) => {
     } as ApiError, 404)
   }
 
-  if (user.role === 'ustadz' && existing.kelas_id && !user.kelas_ids.includes(existing.kelas_id)) {
+  if (user.role === 'ustadz' && existing.kamar_id && !user.kamar_ids.includes(existing.kamar_id)) {
     return c.json({
       error: 'Forbidden',
-      code: 'KELAS_NOT_ASSIGNED',
+      code: 'KAMAR_NOT_ASSIGNED',
       message: 'Anda tidak memiliki akses untuk mengubah absensi ini.'
     } as ApiError, 403)
   }

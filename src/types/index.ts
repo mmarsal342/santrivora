@@ -110,6 +110,7 @@ export interface CatatanDisiplin {
   tanggal_kejadian: string
   dicatat_oleh: string
   tindak_lanjut: string | null
+  jenis_prestasi: string | null
   version: number
   is_deleted: number
   created_at: string

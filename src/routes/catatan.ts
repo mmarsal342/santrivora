@@ -15,7 +15,9 @@ const createSchema = z.object({
   judul: z.string().min(1, 'Judul harus diisi').max(200),
   deskripsi: z.string().max(2000).optional(),
   tanggal_kejadian: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  tindak_lanjut: z.string().max(1000).optional()
+  tindak_lanjut: z.string().max(1000).optional(),
+  // Bebas diisi ustadz sendiri (bukan dropdown tetap) — cuma relevan kalau tipe = 'prestasi'
+  jenis_prestasi: z.string().max(100).optional()
 })
 
 const updateSchema = z.object({
@@ -23,7 +25,8 @@ const updateSchema = z.object({
   judul: z.string().min(1).max(200).optional(),
   deskripsi: z.string().max(2000).nullable().optional(),
   tanggal_kejadian: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  tindak_lanjut: z.string().max(1000).nullable().optional()
+  tindak_lanjut: z.string().max(1000).nullable().optional(),
+  jenis_prestasi: z.string().max(100).nullable().optional()
 })
 
 // GET /api/catatan — scoped by role
@@ -182,12 +185,12 @@ catatan.post('/', zValidator('json', createSchema), async (c) => {
 
   const id = crypto.randomUUID()
   await c.env.DB.prepare(
-    `INSERT INTO catatan_disiplin (id, santri_id, tipe, kategori_id, judul, deskripsi, tanggal_kejadian, dicatat_oleh, tindak_lanjut)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO catatan_disiplin (id, santri_id, tipe, kategori_id, judul, deskripsi, tanggal_kejadian, dicatat_oleh, tindak_lanjut, jenis_prestasi)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, data.santri_id, data.tipe, data.kategori_id || null,
     data.judul, data.deskripsi || null, data.tanggal_kejadian,
-    user.sub, data.tindak_lanjut || null
+    user.sub, data.tindak_lanjut || null, data.jenis_prestasi || null
   ).run()
 
   await c.env.DB.prepare(

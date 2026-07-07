@@ -116,9 +116,13 @@ function defaultDateRange(c: { req: { query: (k: string) => string | undefined }
   return { dari, sampai }
 }
 
-// Rekap absensi + disiplin + flag "butuh diperhatikan" untuk sekumpulan kelas
-async function computeKelasStats(env: Env, kelasIds: string[], dari: string, sampai: string) {
-  if (kelasIds.length === 0) {
+// Rekap absensi + disiplin + flag "butuh diperhatikan" untuk sekumpulan kamar.
+// Absensi dihitung dari sisi KAMAR (bukan kelas) — itu domain operasional
+// harian pondok. Disiplin (pelanggaran/prestasi) tetap ikut ditampilkan
+// walau pencatatannya tetap wewenang wali kelas, karena wali kamar tetap
+// perlu gambaran utuh soal santrinya sendiri.
+async function computeKamarStats(env: Env, kamarIds: string[], dari: string, sampai: string) {
+  if (kamarIds.length === 0) {
     return {
       jumlah_santri: 0,
       absensi: { hadir: 0, sakit: 0, izin: 0, alpa: 0, tingkat_kehadiran_persen: 0 },
@@ -127,19 +131,19 @@ async function computeKelasStats(env: Env, kelasIds: string[], dari: string, sam
     }
   }
 
-  const ph = kelasIds.map(() => '?').join(',')
+  const ph = kamarIds.map(() => '?').join(',')
 
   const santriCount = await env.DB.prepare(
-    `SELECT COUNT(*) as count FROM santri WHERE kelas_id IN (${ph}) AND status = 'aktif'`
-  ).bind(...kelasIds).first<{ count: number }>()
+    `SELECT COUNT(*) as count FROM santri WHERE kamar_id IN (${ph}) AND status = 'aktif'`
+  ).bind(...kamarIds).first<{ count: number }>()
 
   const absensiRows = await env.DB.prepare(`
     SELECT a.status, COUNT(*) as jumlah
     FROM absensi a
     INNER JOIN santri s ON a.santri_id = s.id
-    WHERE s.kelas_id IN (${ph}) AND a.tanggal BETWEEN ? AND ?
+    WHERE s.kamar_id IN (${ph}) AND a.tanggal BETWEEN ? AND ?
     GROUP BY a.status
-  `).bind(...kelasIds, dari, sampai).all<{ status: string; jumlah: number }>()
+  `).bind(...kamarIds, dari, sampai).all<{ status: string; jumlah: number }>()
 
   const absensi = { hadir: 0, sakit: 0, izin: 0, alpa: 0 } as Record<string, number>
   for (const row of absensiRows.results || []) {
@@ -152,10 +156,10 @@ async function computeKelasStats(env: Env, kelasIds: string[], dari: string, sam
     SELECT cd.tipe, COUNT(*) as jumlah
     FROM catatan_disiplin cd
     INNER JOIN santri s ON cd.santri_id = s.id
-    WHERE s.kelas_id IN (${ph}) AND cd.is_deleted = 0
+    WHERE s.kamar_id IN (${ph}) AND cd.is_deleted = 0
       AND date(cd.tanggal_kejadian) BETWEEN ? AND ?
     GROUP BY cd.tipe
-  `).bind(...kelasIds, dari, sampai).all<{ tipe: string; jumlah: number }>()
+  `).bind(...kamarIds, dari, sampai).all<{ tipe: string; jumlah: number }>()
 
   const disiplin = { pelanggaran: 0, prestasi: 0 } as Record<string, number>
   for (const row of disiplinRows.results || []) {
@@ -167,11 +171,11 @@ async function computeKelasStats(env: Env, kelasIds: string[], dari: string, sam
     SELECT s.id, s.nama_lengkap, COUNT(*) as jumlah_alpa
     FROM absensi a
     INNER JOIN santri s ON a.santri_id = s.id
-    WHERE s.kelas_id IN (${ph}) AND a.status = 'alpa' AND a.tanggal BETWEEN ? AND ?
+    WHERE s.kamar_id IN (${ph}) AND a.status = 'alpa' AND a.tanggal BETWEEN ? AND ?
     GROUP BY s.id
     HAVING COUNT(*) >= 3
     ORDER BY jumlah_alpa DESC
-  `).bind(...kelasIds, dari, sampai).all<{ id: string; nama_lengkap: string; jumlah_alpa: number }>()
+  `).bind(...kamarIds, dari, sampai).all<{ id: string; nama_lengkap: string; jumlah_alpa: number }>()
 
   const santriButuhPerhatian = (alpaRows.results || []).map((r) => ({
     id: r.id,
@@ -189,29 +193,46 @@ async function computeKelasStats(env: Env, kelasIds: string[], dari: string, sam
   }
 }
 
-// GET /api/dashboard/per-ustadz?dari=&sampai= — ringkasan tiap ustadz (buat tab-tab di UI)
-dashboard.get('/per-ustadz', requireRole('admin'), async (c) => {
+// GET /api/dashboard/per-wali-kamar?dari=&sampai= — ringkasan tiap wali kamar (buat tab-tab di UI)
+dashboard.get('/per-wali-kamar', requireRole('admin'), async (c) => {
   const { dari, sampai } = defaultDateRange(c)
 
-  const ustadzList = await c.env.DB.prepare(
+  const waliList = await c.env.DB.prepare(
     `SELECT id, email, nama_lengkap, status FROM users WHERE role = 'ustadz' ORDER BY nama_lengkap ASC`
   ).all<{ id: string; email: string; nama_lengkap: string; status: string }>()
 
   const data = []
-  for (const u of ustadzList.results || []) {
-    const kelasAssignments = await c.env.DB.prepare(
-      `SELECT k.id, k.nama FROM ustadz_kelas uk JOIN kelas k ON uk.kelas_id = k.id WHERE uk.user_id = ? AND k.is_active = 1`
-    ).bind(u.id).all<{ id: string; nama: string }>()
-    const kelasIds = (kelasAssignments.results || []).map((k) => k.id)
+  for (const u of waliList.results || []) {
+    const kamarAssignments = await c.env.DB.prepare(
+      `SELECT k.id, k.nama, k.jenis_kelamin FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = ? AND k.is_active = 1`
+    ).bind(u.id).all<{ id: string; nama: string; jenis_kelamin: string }>()
+    const kamarRows = kamarAssignments.results || []
+    const kamarIds = kamarRows.map((k) => k.id)
 
-    const stats = await computeKelasStats(c.env, kelasIds, dari, sampai)
+    const stats = await computeKamarStats(c.env, kamarIds, dari, sampai)
+
+    // Info tambahan buat kamar putri: berapa entri suci/haid yang udah tercatat
+    // di periode ini — cuma jumlah, bukan detail per-tanggal (tetap dijaga
+    // sensitivitasnya walau ditampilin ke admin)
+    let catatanHaidTercatat: number | null = null
+    const kamarPutriIds = kamarRows.filter((k) => k.jenis_kelamin === 'P').map((k) => k.id)
+    if (kamarPutriIds.length > 0) {
+      const ph = kamarPutriIds.map(() => '?').join(',')
+      const haidCount = await c.env.DB.prepare(`
+        SELECT COUNT(*) as count FROM catatan_haid ch
+        INNER JOIN santri s ON ch.santri_id = s.id
+        WHERE s.kamar_id IN (${ph}) AND ch.tanggal BETWEEN ? AND ?
+      `).bind(...kamarPutriIds, dari, sampai).first<{ count: number }>()
+      catatanHaidTercatat = haidCount?.count || 0
+    }
 
     data.push({
       id: u.id,
       nama_lengkap: u.nama_lengkap,
       email: u.email,
       status: u.status,
-      assigned_kelas: kelasAssignments.results || [],
+      assigned_kamar: kamarRows,
+      catatan_haid_tercatat: catatanHaidTercatat,
       ...stats
     })
   }
@@ -219,16 +240,16 @@ dashboard.get('/per-ustadz', requireRole('admin'), async (c) => {
   return c.json({ data, period: { dari, sampai } })
 })
 
-// GET /api/dashboard/per-ustadz/:userId/santri?dari=&sampai= — drill-down per santri
-dashboard.get('/per-ustadz/:userId/santri', requireRole('admin'), async (c) => {
+// GET /api/dashboard/per-wali-kamar/:userId/santri?dari=&sampai= — drill-down per santri
+dashboard.get('/per-wali-kamar/:userId/santri', requireRole('admin'), async (c) => {
   const userId = c.req.param('userId')
   const { dari, sampai } = defaultDateRange(c)
 
-  const ustadz = await c.env.DB.prepare(
+  const wali = await c.env.DB.prepare(
     `SELECT id, nama_lengkap FROM users WHERE id = ? AND role = 'ustadz'`
   ).bind(userId).first<{ id: string; nama_lengkap: string }>()
 
-  if (!ustadz) {
+  if (!wali) {
     return c.json({
       error: 'Not Found',
       code: 'USTADZ_NOT_FOUND',
@@ -236,23 +257,23 @@ dashboard.get('/per-ustadz/:userId/santri', requireRole('admin'), async (c) => {
     } as ApiError, 404)
   }
 
-  const kelasAssignments = await c.env.DB.prepare(
-    `SELECT kelas_id FROM ustadz_kelas WHERE user_id = ?`
-  ).bind(userId).all<{ kelas_id: string }>()
-  const kelasIds = (kelasAssignments.results || []).map((r) => r.kelas_id)
+  const kamarAssignments = await c.env.DB.prepare(
+    `SELECT kamar_id FROM ustadz_kamar WHERE user_id = ?`
+  ).bind(userId).all<{ kamar_id: string }>()
+  const kamarIds = (kamarAssignments.results || []).map((r) => r.kamar_id)
 
-  if (kelasIds.length === 0) {
-    return c.json({ data: { ustadz, santri: [] }, period: { dari, sampai } })
+  if (kamarIds.length === 0) {
+    return c.json({ data: { wali_kamar: wali, santri: [] }, period: { dari, sampai } })
   }
 
-  const ph = kelasIds.map(() => '?').join(',')
+  const ph = kamarIds.map(() => '?').join(',')
   const santriList = await c.env.DB.prepare(
-    `SELECT id, nama_lengkap FROM santri WHERE kelas_id IN (${ph}) AND status = 'aktif' ORDER BY nama_lengkap ASC`
-  ).bind(...kelasIds).all<{ id: string; nama_lengkap: string }>()
+    `SELECT id, nama_lengkap FROM santri WHERE kamar_id IN (${ph}) AND status = 'aktif' ORDER BY nama_lengkap ASC`
+  ).bind(...kamarIds).all<{ id: string; nama_lengkap: string }>()
 
   const santriIds = (santriList.results || []).map((s) => s.id)
   if (santriIds.length === 0) {
-    return c.json({ data: { ustadz, santri: [] }, period: { dari, sampai } })
+    return c.json({ data: { wali_kamar: wali, santri: [] }, period: { dari, sampai } })
   }
   const sph = santriIds.map(() => '?').join(',')
 
@@ -272,12 +293,14 @@ dashboard.get('/per-ustadz/:userId/santri', requireRole('admin'), async (c) => {
       GROUP BY cd.santri_id, kp.id
     `).bind(...santriIds, dari, sampai).all<{ santri_id: string; kategori_id: string | null; kategori_nama: string | null; jumlah: number }>(),
 
+    // jenis_prestasi bebas ketik (bukan dropdown tetap) — dikelompokkan apa
+    // adanya berdasarkan teks yang sama persis
     c.env.DB.prepare(`
-      SELECT santri_id, COUNT(*) as jumlah FROM catatan_disiplin
+      SELECT santri_id, jenis_prestasi, COUNT(*) as jumlah FROM catatan_disiplin
       WHERE santri_id IN (${sph}) AND tipe = 'prestasi' AND is_deleted = 0
         AND date(tanggal_kejadian) BETWEEN ? AND ?
-      GROUP BY santri_id
-    `).bind(...santriIds, dari, sampai).all<{ santri_id: string; jumlah: number }>()
+      GROUP BY santri_id, jenis_prestasi
+    `).bind(...santriIds, dari, sampai).all<{ santri_id: string; jenis_prestasi: string | null; jumlah: number }>()
   ])
 
   const absensiMap = new Map<string, Record<string, number>>()
@@ -297,9 +320,15 @@ dashboard.get('/per-ustadz/:userId/santri', requireRole('admin'), async (c) => {
     })
   }
 
-  const prestasiMap = new Map<string, number>()
+  const prestasiPerJenisMap = new Map<string, Array<{ jenis_prestasi: string; jumlah: number }>>()
+  const prestasiTotalMap = new Map<string, number>()
   for (const row of prestasiRows.results || []) {
-    prestasiMap.set(row.santri_id, row.jumlah)
+    if (!prestasiPerJenisMap.has(row.santri_id)) prestasiPerJenisMap.set(row.santri_id, [])
+    prestasiPerJenisMap.get(row.santri_id)!.push({
+      jenis_prestasi: row.jenis_prestasi || 'Tanpa keterangan jenis',
+      jumlah: row.jumlah
+    })
+    prestasiTotalMap.set(row.santri_id, (prestasiTotalMap.get(row.santri_id) || 0) + row.jumlah)
   }
 
   const santri = (santriList.results || []).map((s) => ({
@@ -307,10 +336,11 @@ dashboard.get('/per-ustadz/:userId/santri', requireRole('admin'), async (c) => {
     nama_lengkap: s.nama_lengkap,
     absensi: absensiMap.get(s.id) || { hadir: 0, sakit: 0, izin: 0, alpa: 0 },
     pelanggaran_per_kategori: pelanggaranMap.get(s.id) || [],
-    prestasi: prestasiMap.get(s.id) || 0
+    prestasi_per_jenis: prestasiPerJenisMap.get(s.id) || [],
+    prestasi_total: prestasiTotalMap.get(s.id) || 0
   }))
 
-  return c.json({ data: { ustadz, santri }, period: { dari, sampai } })
+  return c.json({ data: { wali_kamar: wali, santri }, period: { dari, sampai } })
 })
 
 export { dashboard as dashboardRoutes }
