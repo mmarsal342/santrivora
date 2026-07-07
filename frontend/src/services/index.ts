@@ -175,7 +175,7 @@ export const kelasService = {
 }
 
 export const santriService = {
-  async list(params?: { kelas_id?: string; jenis_kelamin?: string; status?: string; cursor?: string; limit?: number }) {
+  async list(params?: { kelas_id?: string; kamar_id?: string; jenis_kelamin?: string; status?: string; cursor?: string; limit?: number }) {
     const response = await api.get('/santri', { params })
     return response.data
   },

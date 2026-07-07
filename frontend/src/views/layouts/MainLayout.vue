@@ -25,6 +25,12 @@ const navItems: readonly NavItem[] = [
     icon: ['M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.5c0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75V15a.75.75 0 01.75-.75h3a.75.75 0 01.75.75v5.25c0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75V9.75M8.25 21h8.25']
   },
   {
+    name: 'absensi',
+    label: 'Absen Hari Ini',
+    to: '/absensi',
+    icon: ['M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z']
+  },
+  {
     name: 'santri',
     label: 'Data Santri',
     to: '/santri',

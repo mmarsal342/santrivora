@@ -34,29 +34,29 @@ kegiatan.get('/', async (c) => {
   const user = c.get('user')
   const { tanggal, kelas_id, kamar_id } = c.req.query()
 
-  const conditions: string[] = ['is_active = 1']
+  const conditions: string[] = ['g.is_active = 1']
   const params: unknown[] = []
 
   if (tanggal) {
-    conditions.push('tanggal = ?')
+    conditions.push('g.tanggal = ?')
     params.push(tanggal)
   }
   if (kelas_id) {
-    conditions.push('kelas_id = ?')
+    conditions.push('g.kelas_id = ?')
     params.push(kelas_id)
   }
   if (kamar_id) {
-    conditions.push('kamar_id = ?')
+    conditions.push('g.kamar_id = ?')
     params.push(kamar_id)
   }
 
   if (user.role === 'ustadz') {
-    const scopeParts = ['(kelas_id IS NULL AND kamar_id IS NULL)']
+    const scopeParts = ['(g.kelas_id IS NULL AND g.kamar_id IS NULL)']
     if (user.kelas_ids.length > 0) {
-      scopeParts.push(`kelas_id IN (${user.kelas_ids.map(() => '?').join(',')})`)
+      scopeParts.push(`g.kelas_id IN (${user.kelas_ids.map(() => '?').join(',')})`)
     }
     if (user.kamar_ids.length > 0) {
-      scopeParts.push(`kamar_id IN (${user.kamar_ids.map(() => '?').join(',')})`)
+      scopeParts.push(`g.kamar_id IN (${user.kamar_ids.map(() => '?').join(',')})`)
     }
     conditions.push(`(${scopeParts.join(' OR ')})`)
     params.push(...user.kelas_ids, ...user.kamar_ids)

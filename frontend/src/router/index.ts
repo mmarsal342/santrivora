@@ -27,6 +27,11 @@ const router = createRouter({
           component: () => import('@/views/DashboardView.vue')
         },
         {
+          path: 'absensi',
+          name: 'absensi',
+          component: () => import('@/views/absensi/AbsensiHarianView.vue')
+        },
+        {
           path: 'santri',
           name: 'santri',
           component: () => import('@/views/santri/SantriListView.vue')
