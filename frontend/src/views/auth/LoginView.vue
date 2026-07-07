@@ -57,14 +57,6 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return axiosErr.response?.data?.message || fallback
 }
 
-function fillDemo(): void {
-  form.email = 'admin@santrivora.com'
-  form.password = 'Admin123!'
-  submitError.value = ''
-  errors.email = undefined
-  errors.password = undefined
-}
-
 async function handleSubmit(): Promise<void> {
   submitError.value = ''
   if (!validate()) return
@@ -174,23 +166,6 @@ async function handleSubmit(): Promise<void> {
             {{ auth.loading ? 'Memproses...' : 'Masuk' }}
           </button>
         </form>
-
-        <!-- Demo credentials -->
-        <div class="mt-5 rounded-lg border border-emerald-100 bg-emerald-50/70 px-3.5 py-3">
-          <div class="flex items-center justify-between gap-2">
-            <div class="text-xs text-emerald-800">
-              <p class="font-medium">Akun demo</p>
-              <p class="mt-0.5 text-emerald-700/80">admin@santrivora.com · Admin123!</p>
-            </div>
-            <button
-              type="button"
-              class="rounded-md border border-emerald-200 bg-white px-2.5 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100"
-              @click="fillDemo"
-            >
-              Isi otomatis
-            </button>
-          </div>
-        </div>
 
         <!-- Register link -->
         <p class="mt-6 text-center text-sm text-slate-600">
