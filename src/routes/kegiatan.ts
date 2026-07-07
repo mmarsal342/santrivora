@@ -31,14 +31,21 @@ function canManage(user: UserPayload, kegiatanRow: { created_by: string }) {
 
 // Bikin instance kegiatan hari itu dari tiap jadwal_kegiatan aktif yang belum
 // punya instance-nya — jadi admin/wali kamar gak perlu bikin ulang tiap hari.
+// created_by ikut punya template (bukan siapa pun yang lagi request), biar hak
+// edit/hapus (canManage) gak jatuh secara acak ke user pertama yang buka halaman.
 // INSERT OR IGNORE: aman kalau dua request nge-materialize tanggal yang sama bersamaan.
-async function materializeJadwalKegiatan(db: D1Database, tanggal: string, createdBy: string) {
+// Cuma materialize hari ini/ke depan — jangan "ciptakan ulang" histori tanggal
+// yang udah lewat sebelum template ini pernah ada.
+async function materializeJadwalKegiatan(db: D1Database, tanggal: string) {
+  const today = new Date().toISOString().slice(0, 10)
+  if (tanggal < today) return
+
   const templates = await db.prepare(
-    `SELECT j.id, j.nama, j.jenis, j.kelas_id, j.kamar_id
+    `SELECT j.id, j.nama, j.jenis, j.kelas_id, j.kamar_id, j.created_by
      FROM jadwal_kegiatan j
      WHERE j.is_active = 1
        AND NOT EXISTS (SELECT 1 FROM kegiatan g WHERE g.jadwal_kegiatan_id = j.id AND g.tanggal = ?)`
-  ).bind(tanggal).all<{ id: string; nama: string; jenis: string | null; kelas_id: string | null; kamar_id: string | null }>()
+  ).bind(tanggal).all<{ id: string; nama: string; jenis: string | null; kelas_id: string | null; kamar_id: string | null; created_by: string }>()
 
   const rows = templates.results || []
   if (rows.length === 0) return
@@ -47,7 +54,7 @@ async function materializeJadwalKegiatan(db: D1Database, tanggal: string, create
     db.prepare(
       `INSERT OR IGNORE INTO kegiatan (id, nama, jenis, tanggal, kelas_id, kamar_id, jadwal_kegiatan_id, created_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(crypto.randomUUID(), t.nama, t.jenis, tanggal, t.kelas_id, t.kamar_id, t.id, createdBy)
+    ).bind(crypto.randomUUID(), t.nama, t.jenis, tanggal, t.kelas_id, t.kamar_id, t.id, t.created_by)
   )
   await db.batch(statements)
 }
@@ -58,7 +65,7 @@ kegiatan.get('/', async (c) => {
   const { tanggal, kelas_id, kamar_id } = c.req.query()
 
   if (tanggal) {
-    await materializeJadwalKegiatan(c.env.DB, tanggal, user.sub)
+    await materializeJadwalKegiatan(c.env.DB, tanggal)
   }
 
   const conditions: string[] = ['g.is_active = 1']

@@ -10,7 +10,7 @@ const admin = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
 admin.use('*', authMiddleware, requireRole('admin'))
 
 const approveSchema = z.object({
-  kamar_ids: z.array(z.string().uuid()).min(1, 'Minimal 1 kamar harus diassign')
+  kamar_ids: z.array(z.string().uuid())
 })
 
 const resetPasswordSchema = z.object({
@@ -148,18 +148,30 @@ admin.post('/users/:id/approve', zValidator('json', approveSchema), async (c) =>
     } as ApiError, 404)
   }
 
-  // Validate kamar exist
-  const placeholders = kamar_ids.map(() => '?').join(',')
-  const validKamar = await c.env.DB.prepare(
-    `SELECT id FROM kamar WHERE id IN (${placeholders}) AND is_active = 1`
-  ).bind(...kamar_ids).all()
+  const isFirstApproval = user.status === 'pending'
 
-  if (validKamar.results.length !== kamar_ids.length) {
+  if (isFirstApproval && kamar_ids.length === 0) {
     return c.json({
       error: 'Bad Request',
-      code: 'INVALID_KAMAR',
-      message: 'Beberapa kamar tidak ditemukan atau tidak aktif.'
+      code: 'KAMAR_REQUIRED',
+      message: 'Minimal 1 kamar harus diassign saat approve.'
     } as ApiError, 400)
+  }
+
+  // Validate kamar exist (skip query kalau kosong — IN () bukan SQL yang valid)
+  if (kamar_ids.length > 0) {
+    const placeholders = kamar_ids.map(() => '?').join(',')
+    const validKamar = await c.env.DB.prepare(
+      `SELECT id FROM kamar WHERE id IN (${placeholders}) AND is_active = 1`
+    ).bind(...kamar_ids).all()
+
+    if (validKamar.results.length !== kamar_ids.length) {
+      return c.json({
+        error: 'Bad Request',
+        code: 'INVALID_KAMAR',
+        message: 'Beberapa kamar tidak ditemukan atau tidak aktif.'
+      } as ApiError, 400)
+    }
   }
 
   // Update user status (no-op kalau sudah approved)
@@ -170,19 +182,22 @@ admin.post('/users/:id/approve', zValidator('json', approveSchema), async (c) =>
   // Assign kamar (delete old + insert new)
   await c.env.DB.prepare('DELETE FROM ustadz_kamar WHERE user_id = ?').bind(userId).run()
 
-  const stmt = c.env.DB.prepare(
-    'INSERT INTO ustadz_kamar (user_id, kamar_id) VALUES (?, ?)'
-  )
-  const batch = kamar_ids.map((kamarId) => stmt.bind(userId, kamarId))
-  await c.env.DB.batch(batch)
+  if (kamar_ids.length > 0) {
+    const stmt = c.env.DB.prepare(
+      'INSERT INTO ustadz_kamar (user_id, kamar_id) VALUES (?, ?)'
+    )
+    const batch = kamar_ids.map((kamarId) => stmt.bind(userId, kamarId))
+    await c.env.DB.batch(batch)
+  }
 
-  // Audit log
+  // Audit log — beda action buat approval pertama vs sekadar edit kamar belakangan
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
-     VALUES (?, ?, 'user.approve', 'users', ?, ?)`
+     VALUES (?, ?, ?, 'users', ?, ?)`
   ).bind(
     crypto.randomUUID(),
     adminUser.sub,
+    isFirstApproval ? 'user.approve' : 'user.update_kamar',
     userId,
     JSON.stringify({ status: 'approved', kamar_ids })
   ).run()

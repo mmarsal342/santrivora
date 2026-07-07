@@ -104,17 +104,24 @@ async function submit() {
   submitting.value = true
   error.value = ''
   try {
-    const payload: Record<string, unknown> = {
-      nama: form.nama,
-      jenis: form.jenis || undefined,
-      urutan: form.urutan,
-      kelas_id: form.kelas_id || undefined,
-      kamar_id: form.kamar_id || undefined
-    }
     if (editingId.value) {
-      await jadwalKegiatanService.update(editingId.value, payload)
+      // update: kirim null biar kelas/kamar yang dikosongkan balik jadi "Umum",
+      // bukan undefined (yang artinya "jangan diubah" di backend)
+      await jadwalKegiatanService.update(editingId.value, {
+        nama: form.nama,
+        jenis: form.jenis || null,
+        urutan: form.urutan,
+        kelas_id: form.kelas_id || null,
+        kamar_id: form.kamar_id || null
+      })
     } else {
-      await jadwalKegiatanService.create(payload)
+      await jadwalKegiatanService.create({
+        nama: form.nama,
+        jenis: form.jenis || undefined,
+        urutan: form.urutan,
+        kelas_id: form.kelas_id || undefined,
+        kamar_id: form.kamar_id || undefined
+      })
     }
     modalOpen.value = false
     resetForm()

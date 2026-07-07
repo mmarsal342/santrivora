@@ -38,12 +38,18 @@ catatan.get('/', async (c) => {
   const params: unknown[] = []
 
   if (user.role === 'ustadz') {
-    if (user.kelas_ids.length === 0) {
+    const scopeParts: string[] = []
+    if (user.kelas_ids.length > 0) {
+      scopeParts.push(`s.kelas_id IN (${user.kelas_ids.map(() => '?').join(',')})`)
+    }
+    if (user.kamar_ids.length > 0) {
+      scopeParts.push(`s.kamar_id IN (${user.kamar_ids.map(() => '?').join(',')})`)
+    }
+    if (scopeParts.length === 0) {
       return c.json({ data: [], pagination: { cursor: null, hasMore: false } })
     }
-    const ph = user.kelas_ids.map(() => '?').join(',')
-    conditions.push(`s.kelas_id IN (${ph})`)
-    params.push(...user.kelas_ids)
+    conditions.push(`(${scopeParts.join(' OR ')})`)
+    params.push(...user.kelas_ids, ...user.kamar_ids)
   }
 
   if (santri_id) {
@@ -105,7 +111,7 @@ catatan.get('/:id', async (c) => {
   const id = c.req.param('id')
 
   const result = await c.env.DB.prepare(`
-    SELECT cd.*, s.nama_lengkap as santri_nama, s.kelas_id,
+    SELECT cd.*, s.nama_lengkap as santri_nama, s.kelas_id, s.kamar_id,
            kp.nama as kategori_nama, kp.urutan_keparahan,
            u.nama_lengkap as dicatat_oleh_nama
     FROM catatan_disiplin cd
@@ -113,7 +119,7 @@ catatan.get('/:id', async (c) => {
     LEFT JOIN kategori_pelanggaran kp ON cd.kategori_id = kp.id
     LEFT JOIN users u ON cd.dicatat_oleh = u.id
     WHERE cd.id = ? AND cd.is_deleted = 0
-  `).bind(id).first<{ kelas_id: string | null }>()
+  `).bind(id).first<{ kelas_id: string | null; kamar_id: string | null }>()
 
   if (!result) {
     return c.json({
@@ -123,12 +129,17 @@ catatan.get('/:id', async (c) => {
     } as ApiError, 404)
   }
 
-  if (user.role === 'ustadz' && result.kelas_id && !user.kelas_ids.includes(result.kelas_id)) {
-    return c.json({
-      error: 'Forbidden',
-      code: 'KELAS_NOT_ASSIGNED',
-      message: 'Anda tidak memiliki akses ke catatan ini.'
-    } as ApiError, 403)
+  if (user.role === 'ustadz') {
+    const viaKelas = !!result.kelas_id && user.kelas_ids.includes(result.kelas_id)
+    const viaKamar = !!result.kamar_id && user.kamar_ids.includes(result.kamar_id)
+    const santriHasAnyAssignment = !!result.kelas_id || !!result.kamar_id
+    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_ACCESSIBLE',
+        message: 'Anda tidak memiliki akses ke catatan ini.'
+      } as ApiError, 403)
+    }
   }
 
   return c.json({ data: result })
@@ -141,8 +152,8 @@ catatan.post('/', zValidator('json', createSchema), async (c) => {
 
   // Validate santri exists
   const santri = await c.env.DB.prepare(
-    "SELECT id, kelas_id, status FROM santri WHERE id = ?"
-  ).bind(data.santri_id).first<{ kelas_id: string | null; status: string }>()
+    "SELECT id, kelas_id, kamar_id, status FROM santri WHERE id = ?"
+  ).bind(data.santri_id).first<{ kelas_id: string | null; kamar_id: string | null; status: string }>()
 
   if (!santri) {
     return c.json({
@@ -161,12 +172,17 @@ catatan.post('/', zValidator('json', createSchema), async (c) => {
   }
 
   // Scope check
-  if (user.role === 'ustadz' && santri.kelas_id && !user.kelas_ids.includes(santri.kelas_id)) {
-    return c.json({
-      error: 'Forbidden',
-      code: 'SANTRI_NOT_IN_ASSIGNED_KELAS',
-      message: 'Anda tidak dapat mencatat untuk santri di luar kelas Anda.'
-    } as ApiError, 403)
+  if (user.role === 'ustadz') {
+    const viaKelas = !!santri.kelas_id && user.kelas_ids.includes(santri.kelas_id)
+    const viaKamar = !!santri.kamar_id && user.kamar_ids.includes(santri.kamar_id)
+    const santriHasAnyAssignment = !!santri.kelas_id || !!santri.kamar_id
+    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_IN_ASSIGNED_SCOPE',
+        message: 'Anda tidak dapat mencatat untuk santri di luar kelas/kamar Anda.'
+      } as ApiError, 403)
+    }
   }
 
   // Validate kategori if pelanggaran
@@ -215,11 +231,11 @@ catatan.put('/:id', zValidator('json', updateSchema), async (c) => {
   const user = c.get('user')
 
   const existing = await c.env.DB.prepare(`
-    SELECT cd.*, s.kelas_id
+    SELECT cd.*, s.kelas_id, s.kamar_id
     FROM catatan_disiplin cd
     INNER JOIN santri s ON cd.santri_id = s.id
     WHERE cd.id = ? AND cd.is_deleted = 0
-  `).bind(id).first<{ kelas_id: string | null }>()
+  `).bind(id).first<{ kelas_id: string | null; kamar_id: string | null }>()
 
   if (!existing) {
     return c.json({
@@ -230,12 +246,17 @@ catatan.put('/:id', zValidator('json', updateSchema), async (c) => {
   }
 
   // Scope check
-  if (user.role === 'ustadz' && existing.kelas_id && !user.kelas_ids.includes(existing.kelas_id)) {
-    return c.json({
-      error: 'Forbidden',
-      code: 'KELAS_NOT_ASSIGNED',
-      message: 'Anda tidak memiliki akses untuk mengubah catatan ini.'
-    } as ApiError, 403)
+  if (user.role === 'ustadz') {
+    const viaKelas = !!existing.kelas_id && user.kelas_ids.includes(existing.kelas_id)
+    const viaKamar = !!existing.kamar_id && user.kamar_ids.includes(existing.kamar_id)
+    const santriHasAnyAssignment = !!existing.kelas_id || !!existing.kamar_id
+    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_ACCESSIBLE',
+        message: 'Anda tidak memiliki akses untuk mengubah catatan ini.'
+      } as ApiError, 403)
+    }
   }
 
   const updates: string[] = []
@@ -273,11 +294,11 @@ catatan.delete('/:id', async (c) => {
   const user = c.get('user')
 
   const existing = await c.env.DB.prepare(`
-    SELECT cd.*, s.kelas_id
+    SELECT cd.*, s.kelas_id, s.kamar_id
     FROM catatan_disiplin cd
     INNER JOIN santri s ON cd.santri_id = s.id
     WHERE cd.id = ? AND cd.is_deleted = 0
-  `).bind(id).first<{ kelas_id: string | null }>()
+  `).bind(id).first<{ kelas_id: string | null; kamar_id: string | null }>()
 
   if (!existing) {
     return c.json({
@@ -288,12 +309,17 @@ catatan.delete('/:id', async (c) => {
   }
 
   // Scope check
-  if (user.role === 'ustadz' && existing.kelas_id && !user.kelas_ids.includes(existing.kelas_id)) {
-    return c.json({
-      error: 'Forbidden',
-      code: 'KELAS_NOT_ASSIGNED',
-      message: 'Anda tidak memiliki akses untuk menghapus catatan ini.'
-    } as ApiError, 403)
+  if (user.role === 'ustadz') {
+    const viaKelas = !!existing.kelas_id && user.kelas_ids.includes(existing.kelas_id)
+    const viaKamar = !!existing.kamar_id && user.kamar_ids.includes(existing.kamar_id)
+    const santriHasAnyAssignment = !!existing.kelas_id || !!existing.kamar_id
+    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_ACCESSIBLE',
+        message: 'Anda tidak memiliki akses untuk menghapus catatan ini.'
+      } as ApiError, 403)
+    }
   }
 
   await c.env.DB.prepare(

@@ -86,17 +86,22 @@ sync.get('/pull', async (c) => {
   `
   const catatanParams: unknown[] = [since]
 
-  // Scope for ustadz
+  // Scope for ustadz — kelas assignment OR kamar assignment, sama seperti santri.ts/catatan.ts
   if (user.role === 'ustadz') {
-    if (user.kelas_ids.length === 0) {
+    const scopeParts: string[] = []
+    if (user.kelas_ids.length > 0) scopeParts.push(`kelas_id IN (${user.kelas_ids.map(() => '?').join(',')})`)
+    if (user.kamar_ids.length > 0) scopeParts.push(`kamar_id IN (${user.kamar_ids.map(() => '?').join(',')})`)
+
+    if (scopeParts.length === 0) {
       return c.json({ changes: { santri: [], catatan_disiplin: [] }, cursor: null, has_more: false, server_time: new Date().toISOString() })
     }
-    const ph = user.kelas_ids.map(() => '?').join(',')
-    santriQuery += ` AND kelas_id IN (${ph})`
-    santriParams.push(...user.kelas_ids)
+    const scope = `(${scopeParts.join(' OR ')})`
 
-    catatanQuery += ` AND cd.santri_id IN (SELECT id FROM santri WHERE kelas_id IN (${ph}))`
-    catatanParams.push(...user.kelas_ids)
+    santriQuery += ` AND ${scope}`
+    santriParams.push(...user.kelas_ids, ...user.kamar_ids)
+
+    catatanQuery += ` AND cd.santri_id IN (SELECT id FROM santri WHERE ${scope})`
+    catatanParams.push(...user.kelas_ids, ...user.kamar_ids)
   }
 
   if (cursor) {
