@@ -9,6 +9,7 @@ import { santriRoutes } from './routes/santri'
 import { kategoriRoutes } from './routes/kategori'
 import { catatanRoutes } from './routes/catatan'
 import { kegiatanRoutes } from './routes/kegiatan'
+import { jadwalKegiatanRoutes } from './routes/jadwalKegiatan'
 import { absensiRoutes } from './routes/absensi'
 import { catatanHaidRoutes } from './routes/catatanHaid'
 import { dashboardRoutes } from './routes/dashboard'
@@ -38,6 +39,7 @@ app.route('/api/santri', santriRoutes)
 app.route('/api/kategori-pelanggaran', kategoriRoutes)
 app.route('/api/catatan', catatanRoutes)
 app.route('/api/kegiatan', kegiatanRoutes)
+app.route('/api/jadwal-kegiatan', jadwalKegiatanRoutes)
 app.route('/api/absensi', absensiRoutes)
 app.route('/api/catatan-haid', catatanHaidRoutes)
 app.route('/api/dashboard', dashboardRoutes)

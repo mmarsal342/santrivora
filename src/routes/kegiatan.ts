@@ -29,10 +29,37 @@ function canManage(user: UserPayload, kegiatanRow: { created_by: string }) {
   return user.role === 'admin' || user.sub === kegiatanRow.created_by
 }
 
+// Bikin instance kegiatan hari itu dari tiap jadwal_kegiatan aktif yang belum
+// punya instance-nya — jadi admin/wali kamar gak perlu bikin ulang tiap hari.
+// INSERT OR IGNORE: aman kalau dua request nge-materialize tanggal yang sama bersamaan.
+async function materializeJadwalKegiatan(db: D1Database, tanggal: string, createdBy: string) {
+  const templates = await db.prepare(
+    `SELECT j.id, j.nama, j.jenis, j.kelas_id, j.kamar_id
+     FROM jadwal_kegiatan j
+     WHERE j.is_active = 1
+       AND NOT EXISTS (SELECT 1 FROM kegiatan g WHERE g.jadwal_kegiatan_id = j.id AND g.tanggal = ?)`
+  ).bind(tanggal).all<{ id: string; nama: string; jenis: string | null; kelas_id: string | null; kamar_id: string | null }>()
+
+  const rows = templates.results || []
+  if (rows.length === 0) return
+
+  const statements = rows.map((t) =>
+    db.prepare(
+      `INSERT OR IGNORE INTO kegiatan (id, nama, jenis, tanggal, kelas_id, kamar_id, jadwal_kegiatan_id, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(crypto.randomUUID(), t.nama, t.jenis, tanggal, t.kelas_id, t.kamar_id, t.id, createdBy)
+  )
+  await db.batch(statements)
+}
+
 // GET /api/kegiatan — filter by tanggal/kelas_id/kamar_id, scoped by role
 kegiatan.get('/', async (c) => {
   const user = c.get('user')
   const { tanggal, kelas_id, kamar_id } = c.req.query()
+
+  if (tanggal) {
+    await materializeJadwalKegiatan(c.env.DB, tanggal, user.sub)
+  }
 
   const conditions: string[] = ['g.is_active = 1']
   const params: unknown[] = []
@@ -67,8 +94,9 @@ kegiatan.get('/', async (c) => {
     FROM kegiatan g
     LEFT JOIN kelas k ON g.kelas_id = k.id
     LEFT JOIN kamar r ON g.kamar_id = r.id
+    LEFT JOIN jadwal_kegiatan j ON g.jadwal_kegiatan_id = j.id
     WHERE ${conditions.join(' AND ')}
-    ORDER BY g.tanggal DESC, g.nama ASC
+    ORDER BY g.tanggal DESC, COALESCE(j.urutan, 999) ASC, g.nama ASC
   `
   const result = await c.env.DB.prepare(query).bind(...params).all()
   return c.json({ data: result.results || [] })

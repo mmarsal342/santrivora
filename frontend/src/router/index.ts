@@ -84,6 +84,12 @@ const router = createRouter({
           component: () => import('@/views/kegiatan/KegiatanListView.vue')
         },
         {
+          path: 'jadwal-kegiatan',
+          name: 'jadwal-kegiatan',
+          component: () => import('@/views/kegiatan/JadwalKegiatanListView.vue'),
+          meta: { adminOnly: true }
+        },
+        {
           path: 'kategori',
           name: 'kategori',
           component: () => import('@/views/kategori/KategoriListView.vue'),

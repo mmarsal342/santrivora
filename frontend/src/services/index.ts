@@ -119,6 +119,24 @@ export const kegiatanService = {
   }
 }
 
+export const jadwalKegiatanService = {
+  async list() {
+    const response = await api.get('/jadwal-kegiatan')
+    return response.data.data
+  },
+  async create(data: Record<string, unknown>) {
+    const response = await api.post('/jadwal-kegiatan', data)
+    return response.data.data
+  },
+  async update(id: string, data: Record<string, unknown>) {
+    const response = await api.put(`/jadwal-kegiatan/${id}`, data)
+    return response.data.data
+  },
+  async remove(id: string) {
+    await api.delete(`/jadwal-kegiatan/${id}`)
+  }
+}
+
 export const absensiService = {
   async bulkMark(payload: { tanggal: string; kegiatan_id?: string; items: Array<{ santri_id: string; status: string; keterangan?: string }> }) {
     const response = await api.post('/absensi/bulk', payload)
