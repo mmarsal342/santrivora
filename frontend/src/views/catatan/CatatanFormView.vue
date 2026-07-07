@@ -28,6 +28,7 @@ const form = reactive({
   santri_id: '',
   tipe: 'pelanggaran' as 'pelanggaran' | 'prestasi',
   kategori_id: '',
+  jenis_prestasi: '',
   judul: '',
   deskripsi: '',
   tanggal_kejadian: new Date().toISOString().slice(0, 10),
@@ -96,6 +97,9 @@ async function submit() {
     }
     if (form.tipe === 'pelanggaran' && form.kategori_id) {
       payload.kategori_id = form.kategori_id
+    }
+    if (form.tipe === 'prestasi' && form.jenis_prestasi.trim()) {
+      payload.jenis_prestasi = form.jenis_prestasi.trim()
     }
     await catatanService.create(payload)
     router.push({ name: 'catatan' })
@@ -229,6 +233,17 @@ onMounted(() => {
             <option value="">— Pilih kategori —</option>
             <option v-for="k in kategoriList" :key="k.id" :value="k.id">{{ k.nama }}</option>
           </select>
+        </div>
+
+        <div v-if="form.tipe === 'prestasi'">
+          <label class="mb-1 block text-sm font-medium text-gray-700">Jenis Prestasi</label>
+          <input
+            v-model="form.jenis_prestasi"
+            type="text"
+            placeholder="Bebas, misal: Hafalan Juz 30, Juara Lomba Adzan, dll..."
+            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+          />
+          <p class="mt-1 text-xs text-gray-400">Tulis bebas sesuai yang ustadz anggap sebagai prestasi, tidak terikat kategori tetap.</p>
         </div>
 
         <div>
