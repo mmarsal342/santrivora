@@ -12,7 +12,7 @@ const pushItemSchema = z.object({
   entity_type: z.enum(['santri', 'catatan_disiplin']),
   local_id: z.string(),
   action: z.enum(['create', 'update', 'delete']),
-  data: z.record(z.unknown()),
+  data: z.record(z.string(), z.unknown()),
   version: z.number().int().min(0)
 })
 
@@ -162,10 +162,8 @@ sync.get('/conflicts', async (c) => {
 sync.post('/conflicts/:id/resolve', async (c) => {
   const conflictId = c.req.param('id')
   const user = c.get('user')
-  const body = await c.req.json<{
-    resolution: 'use_server' | 'use_client' | 'manual_merge'
-    merged_data?: Record<string, unknown>
-  }>().catch(() => ({ resolution: 'use_server' }))
+  type ResolveBody = { resolution: 'use_server' | 'use_client' | 'manual_merge'; merged_data?: Record<string, unknown> }
+  const body = await c.req.json<ResolveBody>().catch(() => ({ resolution: 'use_server' } as ResolveBody))
 
   const conflict = await c.env.DB.prepare(
     "SELECT * FROM sync_conflicts WHERE id = ? AND status = 'pending'"
@@ -227,7 +225,7 @@ sync.post('/conflicts/:id/resolve', async (c) => {
 async function processSyncItem(
   env: Env, item: z.infer<typeof pushItemSchema>, user: UserPayload
 ): Promise<{
-  local_id: string; status: string; server_id?: string; server_version?: number
+  local_id: string; status: 'synced' | 'conflict' | 'error'; server_id?: string; server_version?: number
   error?: string; conflict?: any
 }> {
   switch (item.entity_type) {

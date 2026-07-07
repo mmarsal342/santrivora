@@ -1,4 +1,5 @@
 import { sign, verify } from 'hono/jwt'
+import type { JWTPayload } from 'hono/utils/jwt/types'
 import bcrypt from 'bcryptjs'
 import type { UserPayload } from '../types'
 
@@ -42,7 +43,7 @@ export async function generateTokens(
     jti: refreshJti
   }
 
-  const access_token = await sign(accessPayload, secrets.access)
+  const access_token = await sign(accessPayload as unknown as JWTPayload, secrets.access)
   const refresh_token = await sign(refreshPayload, secrets.refresh)
 
   return { access_token, refresh_token, refresh_jti: refreshJti }
@@ -50,7 +51,7 @@ export async function generateTokens(
 
 export async function verifyAccessToken(token: string, secret: string): Promise<UserPayload | null> {
   try {
-    const payload = (await verify(token, secret, 'HS256')) as UserPayload
+    const payload = (await verify(token, secret, 'HS256')) as unknown as UserPayload
     return payload
   } catch (err) {
     console.error('Token verify error:', err instanceof Error ? err.message : err)

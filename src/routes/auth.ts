@@ -195,7 +195,7 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
 
 // POST /api/auth/refresh
 auth.post('/refresh', async (c) => {
-  const body = await c.req.json<{ refresh_token?: string }>().catch(() => ({}))
+  const body = await c.req.json<{ refresh_token?: string }>().catch(() => ({} as { refresh_token?: string }))
   const refreshToken = body.refresh_token
 
   if (!refreshToken) {
@@ -288,7 +288,7 @@ auth.post('/refresh', async (c) => {
 
 // POST /api/auth/logout
 auth.post('/logout', async (c) => {
-  const body = await c.req.json<{ access_token?: string; refresh_token?: string }>().catch(() => ({}))
+  const body = await c.req.json<{ access_token?: string; refresh_token?: string }>().catch(() => ({} as { access_token?: string; refresh_token?: string }))
   const accessToken = body.access_token
 
   if (accessToken) {
@@ -350,18 +350,18 @@ auth.get('/me', authMiddleware, async (c) => {
          FROM ustadz_kelas uk
          JOIN kelas k ON uk.kelas_id = k.id
          WHERE uk.user_id = ? AND k.is_active = 1`
-      ).bind(userPayload.sub).all(),
+      ).bind(userPayload.sub).all<{ id: string }>(),
       c.env.DB.prepare(
         `SELECT k.id, k.nama, k.jenis_kelamin, k.kapasitas
          FROM ustadz_kamar uk
          JOIN kamar k ON uk.kamar_id = k.id
          WHERE uk.user_id = ? AND k.is_active = 1`
-      ).bind(userPayload.sub).all()
+      ).bind(userPayload.sub).all<{ id: string }>()
     ])
     assignedKelas = kelasAssignments.results || []
-    kelasIds = (kelasAssignments.results || []).map((k: { id: string }) => k.id)
+    kelasIds = (kelasAssignments.results || []).map((k) => k.id)
     assignedKamar = kamarAssignments.results || []
-    kamarIds = (kamarAssignments.results || []).map((k: { id: string }) => k.id)
+    kamarIds = (kamarAssignments.results || []).map((k) => k.id)
   }
 
   return c.json({
