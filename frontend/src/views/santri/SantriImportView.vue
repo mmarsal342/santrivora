@@ -60,11 +60,6 @@ function findKelasId(nama: string): string | null {
   return match ? match.id : null
 }
 
-function findKamarId(nama: string): string | null {
-  const match = kamarOptions.value.find((k) => k.nama.trim().toLowerCase() === nama.trim().toLowerCase())
-  return match ? match.id : null
-}
-
 function detectDelimiter(text: string): string {
   const firstLine = text.split(/\r?\n/)[0] || ''
   const tabCount = (firstLine.match(/\t/g) || []).length
@@ -132,9 +127,8 @@ function parseAndPreview() {
   }
 
   const header = table[0].map((h) => h.trim().toLowerCase())
-  const missingCols = ['nama_lengkap', 'jenis_kelamin'].filter((c) => !header.includes(c))
-  if (missingCols.length > 0) {
-    parseError.value = `Kolom wajib tidak ditemukan di header: ${missingCols.join(', ')}`
+  if (!header.includes('nama_lengkap')) {
+    parseError.value = 'Kolom wajib tidak ditemukan di header: nama_lengkap'
     return
   }
 
@@ -154,13 +148,6 @@ function parseAndPreview() {
       payload.nama_lengkap = raw.nama_lengkap
     }
 
-    const jk = (raw.jenis_kelamin || '').toUpperCase()
-    if (jk !== 'L' && jk !== 'P') {
-      errors.push('Jenis kelamin harus "L" atau "P".')
-    } else {
-      payload.jenis_kelamin = jk
-    }
-
     if (raw.kelas) {
       const kelasId = findKelasId(raw.kelas)
       if (!kelasId) {
@@ -170,13 +157,25 @@ function parseAndPreview() {
       }
     }
 
+    let kamarMatch: Kamar | undefined
     if (raw.kamar) {
-      const kamarId = findKamarId(raw.kamar)
-      if (!kamarId) {
+      kamarMatch = kamarOptions.value.find((k) => k.nama.trim().toLowerCase() === raw.kamar.trim().toLowerCase())
+      if (!kamarMatch) {
         errors.push(`Kamar tidak ditemukan: "${raw.kamar}".`)
       } else {
-        payload.kamar_id = kamarId
+        payload.kamar_id = kamarMatch.id
       }
+    }
+
+    // jenis_kelamin boleh kosong kalau kamar-nya valid — disimpulkan dari jenis kamar (Putra/Putri)
+    let jk = (raw.jenis_kelamin || '').toUpperCase()
+    if (jk !== 'L' && jk !== 'P' && kamarMatch) {
+      jk = kamarMatch.jenis_kelamin
+    }
+    if (jk !== 'L' && jk !== 'P') {
+      errors.push('Jenis kelamin harus "L" atau "P" (atau isi kolom kamar dengan nama kamar yang valid supaya bisa disimpulkan otomatis).')
+    } else {
+      payload.jenis_kelamin = jk
     }
 
     if (raw.angkatan) payload.angkatan = raw.angkatan
@@ -226,7 +225,8 @@ function downloadTemplate() {
   const header = COLUMNS.join(',')
   const example = [
     'Ahmad Fauzi,L,,Kamar Putra 1,2024,2024-07-01,2012-03-15,Quality Time',
-    'Siti Aminah,P,Kelas 1A,Kamar Putri 1,2024,2024-07-01,,'
+    'Siti Aminah,P,Kelas 1A,Kamar Putri 1,2024,2024-07-01,,',
+    'Budi Santoso,,,Kamar Putra 1,,,,'
   ].join('\n')
   const blob = new Blob([header + '\n' + example + '\n'], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
@@ -285,8 +285,9 @@ onMounted(loadOptions)
         <div>
           <h2 class="text-sm font-semibold text-slate-800">1. Siapkan file CSV</h2>
           <p class="text-xs text-slate-500 mt-0.5">
-            Kolom wajib: <code class="rounded bg-slate-100 px-1">nama_lengkap</code>, <code class="rounded bg-slate-100 px-1">jenis_kelamin</code> (L/P).
-            Opsional: kelas, kamar (isi dengan nama persis seperti di sistem), angkatan, tanggal_masuk, tanggal_lahir, love_language (format tanggal: YYYY-MM-DD).
+            Kolom wajib: <code class="rounded bg-slate-100 px-1">nama_lengkap</code>.
+            <code class="rounded bg-slate-100 px-1">jenis_kelamin</code> (L/P) boleh dikosongkan asal kolom <code class="rounded bg-slate-100 px-1">kamar</code> diisi nama kamar yang valid — jenis kelamin otomatis disimpulkan dari jenis kamarnya (Putra/Putri).
+            Opsional lainnya: kelas, angkatan, tanggal_masuk, tanggal_lahir, love_language (format tanggal: YYYY-MM-DD).
           </p>
         </div>
         <button
