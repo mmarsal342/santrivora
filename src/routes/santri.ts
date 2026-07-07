@@ -14,7 +14,10 @@ const createSchema = z.object({
   kelas_id: z.string().uuid().optional(),
   angkatan: z.string().max(10).optional(),
   tanggal_masuk: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  foto_url: z.string().url().optional()
+  foto_url: z.string().url().optional(),
+  // Profil opsional — nggak wajib diisi semua
+  tanggal_lahir: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  love_language: z.string().max(200).optional()
 })
 
 const updateSchema = z.object({
@@ -24,7 +27,9 @@ const updateSchema = z.object({
   angkatan: z.string().max(10).nullable().optional(),
   tanggal_masuk: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   status: z.enum(['aktif', 'lulus', 'keluar']).optional(),
-  foto_url: z.string().url().nullable().optional()
+  foto_url: z.string().url().nullable().optional(),
+  tanggal_lahir: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  love_language: z.string().max(200).nullable().optional()
 })
 
 // GET /api/santri — scoped by role
@@ -170,12 +175,13 @@ santri.post('/', zValidator('json', createSchema), async (c) => {
 
   const id = crypto.randomUUID()
   await c.env.DB.prepare(
-    `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, angkatan, tanggal_masuk, foto_url)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, angkatan, tanggal_masuk, foto_url, tanggal_lahir, love_language)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, data.nama_lengkap, data.jenis_kelamin,
     data.kelas_id || null, data.angkatan || null,
-    data.tanggal_masuk || null, data.foto_url || null
+    data.tanggal_masuk || null, data.foto_url || null,
+    data.tanggal_lahir || null, data.love_language || null
   ).run()
 
   await c.env.DB.prepare(
@@ -330,11 +336,12 @@ santri.post('/bulk', zValidator('json', bulkSchema), async (c) => {
     try {
       const id = crypto.randomUUID()
       await c.env.DB.prepare(
-        `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, angkatan, tanggal_masuk)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, angkatan, tanggal_masuk, tanggal_lahir, love_language)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         id, s.nama_lengkap, s.jenis_kelamin,
-        s.kelas_id || null, s.angkatan || null, s.tanggal_masuk || null
+        s.kelas_id || null, s.angkatan || null, s.tanggal_masuk || null,
+        s.tanggal_lahir || null, s.love_language || null
       ).run()
       results.push({ row, status: 'created', id })
     } catch (err: any) {

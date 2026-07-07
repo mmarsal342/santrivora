@@ -38,6 +38,8 @@ export interface Santri {
   tanggal_masuk: string | null
   status: 'aktif' | 'lulus' | 'keluar'
   foto_url: string | null
+  tanggal_lahir: string | null
+  love_language: string | null
   version: number
   created_at: string
   updated_at: string
