@@ -32,11 +32,59 @@ export interface Santri {
   nama_lengkap: string
   jenis_kelamin: 'L' | 'P'
   kelas_id: string | null
+  kamar_id: string | null
   angkatan: string | null
   tanggal_masuk: string | null
   status: 'aktif' | 'lulus' | 'keluar'
   foto_url: string | null
   version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface Kamar {
+  id: string
+  nama: string
+  jenis_kelamin: 'L' | 'P'
+  kapasitas: number | null
+  is_active: number
+  created_at: string
+  updated_at: string
+}
+
+export interface Kegiatan {
+  id: string
+  nama: string
+  jenis: string | null
+  tanggal: string
+  kelas_id: string | null
+  kamar_id: string | null
+  is_active: number
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface Absensi {
+  id: string
+  santri_id: string
+  tanggal: string
+  kegiatan_id: string | null
+  status: 'hadir' | 'sakit' | 'izin' | 'alpa'
+  keterangan: string | null
+  dicatat_oleh: string
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CatatanHaid {
+  id: string
+  santri_id: string
+  tanggal: string
+  status: 'suci' | 'haid'
+  catatan: string | null
+  dicatat_oleh: string
   created_at: string
   updated_at: string
 }

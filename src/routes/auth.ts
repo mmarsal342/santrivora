@@ -155,7 +155,7 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
   ).bind(
     crypto.randomUUID(),
     user.id,
-    crypto.randomUUID(),
+    tokens.refresh_jti,
     c.req.header('CF-Connecting-IP') || null,
     c.req.header('User-Agent') || null
   ).run()
@@ -210,6 +210,21 @@ auth.post('/refresh', async (c) => {
     } as ApiError, 401)
   }
 
+  // Session must exist, be unrevoked, and not expired — catches logout,
+  // admin suspend/reset-password, and reuse of an already-rotated refresh token
+  const session = await c.env.DB.prepare(
+    `SELECT id FROM sessions
+     WHERE refresh_token_jti = ? AND user_id = ? AND is_revoked = 0 AND expires_at > datetime('now')`
+  ).bind(payload.jti, payload.sub).first<{ id: string }>()
+
+  if (!session) {
+    return c.json({
+      error: 'Unauthorized',
+      code: 'INVALID_REFRESH_TOKEN',
+      message: 'Sesi tidak valid atau sudah berakhir. Silakan login kembali.'
+    } as ApiError, 401)
+  }
+
   // Get user
   const user = await c.env.DB.prepare(
     'SELECT * FROM users WHERE id = ?'
@@ -247,6 +262,12 @@ auth.post('/refresh', async (c) => {
     { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET }
   )
 
+  // Rotate the session's jti — the old refresh token can no longer be used,
+  // so a replay of it after this point is detected as an unknown jti above
+  await c.env.DB.prepare(
+    `UPDATE sessions SET refresh_token_jti = ?, last_activity = datetime('now') WHERE id = ?`
+  ).bind(tokens.refresh_jti, session.id).run()
+
   return c.json({
     message: 'Token diperbarui',
     data: {
@@ -258,7 +279,7 @@ auth.post('/refresh', async (c) => {
 
 // POST /api/auth/logout
 auth.post('/logout', async (c) => {
-  const body = await c.req.json<{ access_token?: string }>().catch(() => ({}))
+  const body = await c.req.json<{ access_token?: string; refresh_token?: string }>().catch(() => ({}))
   const accessToken = body.access_token
 
   if (accessToken) {
@@ -277,6 +298,16 @@ auth.post('/logout', async (c) => {
       }
     } catch {
       // Ignore parsing errors
+    }
+  }
+
+  if (body.refresh_token) {
+    // Revoke the session so the refresh token can't be used again
+    const payload = await verifyRefreshToken(body.refresh_token, c.env.JWT_REFRESH_SECRET)
+    if (payload) {
+      await c.env.DB.prepare(
+        `UPDATE sessions SET is_revoked = 1 WHERE refresh_token_jti = ? AND user_id = ?`
+      ).bind(payload.jti, payload.sub).run()
     }
   }
 
@@ -372,7 +403,7 @@ auth.post('/change-password', authMiddleware, zValidator('json', changePasswordS
      VALUES (?, ?, 'user.change_password', 'users', ?)`
   ).bind(crypto.randomUUID(), userPayload.sub, userPayload.sub).run()
 
-  // Blacklist current token (force re-login)
+  // Blacklist current access token (force re-login on other devices)
   const remainingSeconds = userPayload.exp - Math.floor(Date.now() / 1000)
   if (remainingSeconds > 0) {
     await c.env.KV.put(`blacklist:${userPayload.jti}`, 'true', {
@@ -380,7 +411,12 @@ auth.post('/change-password', authMiddleware, zValidator('json', changePasswordS
     })
   }
 
-  // Generate new tokens
+  // Revoke all existing refresh-token sessions
+  await c.env.DB.prepare(
+    'UPDATE sessions SET is_revoked = 1 WHERE user_id = ?'
+  ).bind(userPayload.sub).run()
+
+  // Generate new tokens + a fresh session for this device
   const tokens = await generateTokens(
     userPayload.sub,
     userPayload.email,
@@ -388,6 +424,17 @@ auth.post('/change-password', authMiddleware, zValidator('json', changePasswordS
     userPayload.kelas_ids,
     { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET }
   )
+
+  await c.env.DB.prepare(
+    `INSERT INTO sessions (id, user_id, refresh_token_jti, ip_address, user_agent, last_activity, expires_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now', '+7 days'))`
+  ).bind(
+    crypto.randomUUID(),
+    userPayload.sub,
+    tokens.refresh_jti,
+    c.req.header('CF-Connecting-IP') || null,
+    c.req.header('User-Agent') || null
+  ).run()
 
   return c.json({
     message: 'Password berhasil diubah.',

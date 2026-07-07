@@ -18,8 +18,9 @@ export async function generateTokens(
   role: string,
   kelasIds: string[],
   secrets: { access: string; refresh: string }
-): Promise<{ access_token: string; refresh_token: string }> {
+): Promise<{ access_token: string; refresh_token: string; refresh_jti: string }> {
   const now = Math.floor(Date.now() / 1000)
+  const refreshJti = crypto.randomUUID()
 
   const accessPayload: UserPayload = {
     sub: userId,
@@ -36,13 +37,13 @@ export async function generateTokens(
     type: 'refresh',
     iat: now,
     exp: now + 604800, // 7 days
-    jti: crypto.randomUUID()
+    jti: refreshJti
   }
 
   const access_token = await sign(accessPayload, secrets.access)
   const refresh_token = await sign(refreshPayload, secrets.refresh)
 
-  return { access_token, refresh_token }
+  return { access_token, refresh_token, refresh_jti: refreshJti }
 }
 
 export async function verifyAccessToken(token: string, secret: string): Promise<UserPayload | null> {
