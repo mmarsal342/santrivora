@@ -6,7 +6,8 @@ interface User {
   id: string
   email: string
   nama_lengkap: string
-  role: 'admin' | 'ustadz'
+  role: 'admin' | 'ustadz' | 'kyai' | 'kepala_asrama'
+  asrama_jenis?: 'L' | 'P' | null
   status: string
   kelas_ids: string[]
   assigned_kelas?: Array<{ id: string; nama: string; tingkatan: string; tahun_ajaran: string }>
@@ -22,6 +23,17 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => !!token.value)
   const isAdmin = computed(() => user.value?.role === 'admin')
   const isUstadz = computed(() => user.value?.role === 'ustadz')
+  const isKyai = computed(() => user.value?.role === 'kyai')
+  const isKepalaAsrama = computed(() => user.value?.role === 'kepala_asrama')
+  const isReadOnly = computed(() => user.value?.role === 'kyai')
+  /** Peran dengan akses luas (admin, kyai, kepala_asrama) — bukan ustadz biasa */
+  const isPrivileged = computed(() => ['admin', 'kyai', 'kepala_asrama'].includes(user.value?.role || ''))
+  const asramaJenis = computed(() => user.value?.asrama_jenis ?? null)
+  const asramaLabel = computed(() => {
+    if (user.value?.asrama_jenis === 'L') return 'Putra'
+    if (user.value?.asrama_jenis === 'P') return 'Putri'
+    return null
+  })
 
   async function login(email: string, password: string) {
     loading.value = true
@@ -66,6 +78,12 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     isAdmin,
     isUstadz,
+    isKyai,
+    isKepalaAsrama,
+    isReadOnly,
+    isPrivileged,
+    asramaJenis,
+    asramaLabel,
     login,
     fetchMe,
     logout

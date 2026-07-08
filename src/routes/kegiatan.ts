@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
-import { authMiddleware } from '../middleware/auth'
+import { authMiddleware, requireCanMutate } from '../middleware/auth'
+import { resolveKamarScope, canAccessKamar } from '../lib/scope'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const kegiatan = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -84,16 +85,19 @@ kegiatan.get('/', async (c) => {
     params.push(kamar_id)
   }
 
-  if (user.role === 'ustadz') {
+  // Scope: ustadz (kelas/kamar) & kepala_asrama (kamar asramanya). kyai/admin = global.
+  const scopedKamarIds = await resolveKamarScope(c.env, user)
+  if (scopedKamarIds !== null) {
     const scopeParts = ['(g.kelas_id IS NULL AND g.kamar_id IS NULL)']
-    if (user.kelas_ids.length > 0) {
+    if (user.role === 'ustadz' && user.kelas_ids.length > 0) {
       scopeParts.push(`g.kelas_id IN (${user.kelas_ids.map(() => '?').join(',')})`)
+      params.push(...user.kelas_ids)
     }
-    if (user.kamar_ids.length > 0) {
-      scopeParts.push(`g.kamar_id IN (${user.kamar_ids.map(() => '?').join(',')})`)
+    if (scopedKamarIds.length > 0) {
+      scopeParts.push(`g.kamar_id IN (${scopedKamarIds.map(() => '?').join(',')})`)
+      params.push(...scopedKamarIds)
     }
     conditions.push(`(${scopeParts.join(' OR ')})`)
-    params.push(...user.kelas_ids, ...user.kamar_ids)
   }
 
   const query = `
@@ -141,13 +145,23 @@ kegiatan.get('/:id', async (c) => {
         message: 'Anda tidak memiliki akses ke kegiatan ini.'
       } as ApiError, 403)
     }
+  } else if (user.role === 'kepala_asrama') {
+    const isGeneral = !result.kelas_id && !result.kamar_id
+    const inAsrama = await canAccessKamar(c.env, user, result.kamar_id)
+    if (!isGeneral && !inAsrama) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'KEGIATAN_NOT_ACCESSIBLE',
+        message: 'Kegiatan ini di luar lingkup asrama Anda.'
+      } as ApiError, 403)
+    }
   }
 
   return c.json({ data: result })
 })
 
 // POST /api/kegiatan
-kegiatan.post('/', zValidator('json', createSchema), async (c) => {
+kegiatan.post('/', requireCanMutate(), zValidator('json', createSchema), async (c) => {
   const data = c.req.valid('json')
   const user = c.get('user')
 
@@ -164,6 +178,14 @@ kegiatan.post('/', zValidator('json', createSchema), async (c) => {
         error: 'Forbidden',
         code: 'KAMAR_NOT_ASSIGNED',
         message: 'Anda bukan wali kamar tersebut.'
+      } as ApiError, 403)
+    }
+  } else if (user.role === 'kepala_asrama') {
+    if (data.kamar_id && !(await canAccessKamar(c.env, user, data.kamar_id))) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'KAMAR_NOT_IN_ASRAMA',
+        message: 'Kamar ini di luar lingkup asrama Anda.'
       } as ApiError, 403)
     }
   }
@@ -186,13 +208,13 @@ kegiatan.post('/', zValidator('json', createSchema), async (c) => {
   return c.json({ message: 'Kegiatan berhasil dibuat.', data: result }, 201)
 })
 
-// PUT /api/kegiatan/:id — admin atau pembuat kegiatan
-kegiatan.put('/:id', zValidator('json', updateSchema), async (c) => {
+// PUT /api/kegiatan/:id — admin, pembuat kegiatan, atau kepala_asrama (asramanya)
+kegiatan.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async (c) => {
   const id = c.req.param('id')
   const data = c.req.valid('json')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ?').bind(id).first<{ created_by: string }>()
+  const existing = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ?').bind(id).first<{ created_by: string; kamar_id: string | null }>()
   if (!existing) {
     return c.json({
       error: 'Not Found',
@@ -201,7 +223,9 @@ kegiatan.put('/:id', zValidator('json', updateSchema), async (c) => {
     } as ApiError, 404)
   }
 
-  if (!canManage(user, existing)) {
+  const mayManage = canManage(user, existing)
+    || (user.role === 'kepala_asrama' && (await canAccessKamar(c.env, user, existing.kamar_id)))
+  if (!mayManage) {
     return c.json({
       error: 'Forbidden',
       code: 'INSUFFICIENT_PERMISSIONS',
@@ -236,12 +260,12 @@ kegiatan.put('/:id', zValidator('json', updateSchema), async (c) => {
   return c.json({ message: 'Kegiatan berhasil diperbarui.', data: result })
 })
 
-// DELETE /api/kegiatan/:id — soft delete, admin atau pembuat kegiatan
-kegiatan.delete('/:id', async (c) => {
+// DELETE /api/kegiatan/:id — soft delete, admin, pembuat, atau kepala_asrama (asramanya)
+kegiatan.delete('/:id', requireCanMutate(), async (c) => {
   const id = c.req.param('id')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ? AND is_active = 1').bind(id).first<{ created_by: string }>()
+  const existing = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ? AND is_active = 1').bind(id).first<{ created_by: string; kamar_id: string | null }>()
   if (!existing) {
     return c.json({
       error: 'Not Found',
@@ -250,7 +274,9 @@ kegiatan.delete('/:id', async (c) => {
     } as ApiError, 404)
   }
 
-  if (!canManage(user, existing)) {
+  const mayManage = canManage(user, existing)
+    || (user.role === 'kepala_asrama' && (await canAccessKamar(c.env, user, existing.kamar_id)))
+  if (!mayManage) {
     return c.json({
       error: 'Forbidden',
       code: 'INSUFFICIENT_PERMISSIONS',

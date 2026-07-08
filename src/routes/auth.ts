@@ -92,6 +92,7 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
     password_hash: string
     nama_lengkap: string
     role: string
+    asrama_jenis: 'L' | 'P' | null
     status: string
     failed_login_attempts: number
   }>()
@@ -149,7 +150,8 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
     user.role,
     kelasIds,
     { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET },
-    kamarIds
+    kamarIds,
+    user.asrama_jenis
   )
 
   // Store session
@@ -185,6 +187,7 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
         email: user.email,
         nama_lengkap: user.nama_lengkap,
         role: user.role,
+        asrama_jenis: user.asrama_jenis,
         status: user.status,
         kelas_ids: kelasIds,
         kamar_ids: kamarIds
@@ -238,6 +241,7 @@ auth.post('/refresh', async (c) => {
     email: string
     nama_lengkap: string
     role: string
+    asrama_jenis: 'L' | 'P' | null
     status: string
   }>()
 
@@ -268,7 +272,8 @@ auth.post('/refresh', async (c) => {
     user.role,
     kelasIds,
     { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET },
-    kamarIds
+    kamarIds,
+    user.asrama_jenis
   )
 
   // Rotate the session's jti — the old refresh token can no longer be used,
@@ -328,7 +333,7 @@ auth.get('/me', authMiddleware, async (c) => {
   const userPayload = c.get('user')
 
   const user = await c.env.DB.prepare(
-    'SELECT id, email, nama_lengkap, role, status, last_login FROM users WHERE id = ?'
+    'SELECT id, email, nama_lengkap, role, asrama_jenis, status, last_login FROM users WHERE id = ?'
   ).bind(userPayload.sub).first()
 
   if (!user) {
@@ -446,7 +451,8 @@ auth.post('/change-password', authMiddleware, zValidator('json', changePasswordS
     userPayload.role,
     userPayload.kelas_ids,
     { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET },
-    userPayload.kamar_ids
+    userPayload.kamar_ids,
+    userPayload.asrama_jenis ?? null
   )
 
   await c.env.DB.prepare(

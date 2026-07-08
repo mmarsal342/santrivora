@@ -44,17 +44,20 @@ const router = createRouter({
         {
           path: 'santri/new',
           name: 'santri-new',
-          component: () => import('@/views/santri/SantriFormView.vue')
+          component: () => import('@/views/santri/SantriFormView.vue'),
+          meta: { excludeReadOnly: true }
         },
         {
           path: 'santri/import',
           name: 'santri-import',
-          component: () => import('@/views/santri/SantriImportView.vue')
+          component: () => import('@/views/santri/SantriImportView.vue'),
+          meta: { excludeReadOnly: true }
         },
         {
           path: 'santri/:id/edit',
           name: 'santri-edit',
-          component: () => import('@/views/santri/SantriFormView.vue')
+          component: () => import('@/views/santri/SantriFormView.vue'),
+          meta: { excludeReadOnly: true }
         },
         {
           path: 'catatan',
@@ -64,7 +67,8 @@ const router = createRouter({
         {
           path: 'catatan/new',
           name: 'catatan-new',
-          component: () => import('@/views/catatan/CatatanFormView.vue')
+          component: () => import('@/views/catatan/CatatanFormView.vue'),
+          meta: { excludeReadOnly: true }
         },
         {
           path: 'kelas',
@@ -76,7 +80,7 @@ const router = createRouter({
           path: 'kamar',
           name: 'kamar',
           component: () => import('@/views/kamar/KamarListView.vue'),
-          meta: { adminOnly: true }
+          meta: { managerOnly: true }
         },
         {
           path: 'kegiatan',
@@ -99,7 +103,18 @@ const router = createRouter({
           path: 'users',
           name: 'users',
           component: () => import('@/views/users/UsersListView.vue'),
-          meta: { adminOnly: true }
+          meta: { managerOnly: true }
+        },
+        {
+          path: 'pesan',
+          name: 'pesan',
+          component: () => import('@/views/pesan/PesanView.vue')
+        },
+        {
+          path: 'pesan/compose',
+          name: 'pesan-compose',
+          component: () => import('@/views/pesan/PesanView.vue'),
+          meta: { kyaiOrAdmin: true }
         },
         {
           path: 'settings',
@@ -135,8 +150,22 @@ router.beforeEach(async (to, _from, next) => {
     await auth.fetchMe()
   }
 
-  if (to.meta.adminOnly && auth.user?.role !== 'admin') {
+  const role = auth.user?.role
+  // admin-only routes (kelas, kategori, audit-log, jadwal-kegiatan)
+  if (to.meta.adminOnly && role !== 'admin') {
     return next({ name: 'dashboard' })
+  }
+  // manager-only routes: admin atau kepala_asrama (kamar, users)
+  if (to.meta.managerOnly && role !== 'admin' && role !== 'kepala_asrama') {
+    return next({ name: 'dashboard' })
+  }
+  // tolak kyai (read-only) dari halaman mutasi data
+  if (to.meta.excludeReadOnly && auth.isReadOnly) {
+    return next({ name: 'dashboard' })
+  }
+  // pesan compose: kyai atau admin
+  if (to.meta.kyaiOrAdmin && role !== 'kyai' && role !== 'admin') {
+    return next({ name: 'pesan' })
   }
 
   next()

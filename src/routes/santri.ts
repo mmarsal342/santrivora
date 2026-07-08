@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
-import { authMiddleware } from '../middleware/auth'
+import { authMiddleware, requireCanMutate } from '../middleware/auth'
+import { resolveKamarScope, canAccessKamar } from '../lib/scope'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const santri = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -42,19 +43,22 @@ santri.get('/', async (c) => {
   const params: unknown[] = []
   const conditions: string[] = []
 
-  if (user.role === 'ustadz') {
+  // Scope: ustadz (kamar/kelas) & kepala_asrama (kamar asramanya). kyai/admin = global.
+  const scopedKamarIds = await resolveKamarScope(c.env, user)
+  if (scopedKamarIds !== null) {
     const scopeParts: string[] = []
-    if (user.kelas_ids.length > 0) {
+    if (user.role === 'ustadz' && user.kelas_ids.length > 0) {
       scopeParts.push(`s.kelas_id IN (${user.kelas_ids.map(() => '?').join(',')})`)
+      params.push(...user.kelas_ids)
     }
-    if (user.kamar_ids.length > 0) {
-      scopeParts.push(`s.kamar_id IN (${user.kamar_ids.map(() => '?').join(',')})`)
+    if (scopedKamarIds.length > 0) {
+      scopeParts.push(`s.kamar_id IN (${scopedKamarIds.map(() => '?').join(',')})`)
+      params.push(...scopedKamarIds)
     }
     if (scopeParts.length === 0) {
       return c.json({ data: [], pagination: { cursor: null, hasMore: false } })
     }
     conditions.push(`(${scopeParts.join(' OR ')})`)
-    params.push(...user.kelas_ids, ...user.kamar_ids)
   }
 
   if (kelas_id) {
@@ -69,11 +73,11 @@ santri.get('/', async (c) => {
     params.push(kelas_id)
   }
   if (kamar_id) {
-    if (user.role === 'ustadz' && !user.kamar_ids.includes(kamar_id)) {
+    if (!(await canAccessKamar(c.env, user, kamar_id))) {
       return c.json({
         error: 'Forbidden',
         code: 'KAMAR_NOT_ASSIGNED',
-        message: 'Anda bukan wali kamar ini.'
+        message: 'Anda tidak memiliki akses ke kamar ini.'
       } as ApiError, 403)
     }
     conditions.push('s.kamar_id = ?')
@@ -133,7 +137,7 @@ santri.get('/:id', async (c) => {
     LEFT JOIN kelas k ON s.kelas_id = k.id
     LEFT JOIN kamar km ON s.kamar_id = km.id
     WHERE s.id = ?
-  `).bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null }>()
+  `).bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null; kamar_jenis_kelamin: 'L' | 'P' | null }>()
 
   if (!santriData) {
     return c.json({
@@ -143,8 +147,8 @@ santri.get('/:id', async (c) => {
     } as ApiError, 404)
   }
 
-  // Scope check for ustadz — accessible via kelas assignment OR kamar assignment.
-  // A santri with neither assigned is unrestricted (matches the pre-kamar behavior).
+  // Scope check — ustadz (via kelas/kamar), kepala_asrama (via jenis_kelamin kamar).
+  // A santri with neither kelas nor kamar assigned is unrestricted for ustadz (legacy).
   if (user.role === 'ustadz') {
     const viaKelas = !!santriData.kelas_id && user.kelas_ids.includes(santriData.kelas_id)
     const viaKamar = !!santriData.kamar_id && user.kamar_ids.includes(santriData.kamar_id)
@@ -155,6 +159,14 @@ santri.get('/:id', async (c) => {
         error: 'Forbidden',
         code: 'SANTRI_NOT_ACCESSIBLE',
         message: 'Anda tidak memiliki akses ke data santri ini.'
+      } as ApiError, 403)
+    }
+  } else if (user.role === 'kepala_asrama') {
+    if (!santriData.kamar_jenis_kelamin || santriData.kamar_jenis_kelamin !== user.asrama_jenis) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_ACCESSIBLE',
+        message: 'Santri ini di luar lingkup asrama Anda.'
       } as ApiError, 403)
     }
   }
@@ -176,7 +188,7 @@ santri.get('/:id', async (c) => {
 })
 
 // POST /api/santri
-santri.post('/', zValidator('json', createSchema), async (c) => {
+santri.post('/', requireCanMutate(), zValidator('json', createSchema), async (c) => {
   const data = c.req.valid('json')
   const user = c.get('user')
 
@@ -193,6 +205,13 @@ santri.post('/', zValidator('json', createSchema), async (c) => {
       error: 'Forbidden',
       code: 'KAMAR_NOT_ASSIGNED',
       message: 'Anda bukan wali kamar tersebut.'
+    } as ApiError, 403)
+  }
+  if (user.role === 'kepala_asrama' && !(await canAccessKamar(c.env, user, data.kamar_id))) {
+    return c.json({
+      error: 'Forbidden',
+      code: 'KAMAR_NOT_IN_ASRAMA',
+      message: 'Kamar ini di luar lingkup asrama Anda.'
     } as ApiError, 403)
   }
 
@@ -240,7 +259,7 @@ santri.post('/', zValidator('json', createSchema), async (c) => {
 })
 
 // PUT /api/santri/:id
-santri.put('/:id', zValidator('json', updateSchema), async (c) => {
+santri.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async (c) => {
   const santriId = c.req.param('id')
   const data = c.req.valid('json')
   const user = c.get('user')
@@ -270,6 +289,15 @@ santri.put('/:id', zValidator('json', updateSchema), async (c) => {
         error: 'Forbidden',
         code: 'KAMAR_NOT_ASSIGNED',
         message: 'Anda bukan wali kamar tersebut.'
+      } as ApiError, 403)
+    }
+  } else if (user.role === 'kepala_asrama') {
+    const targetKamarId = data.kamar_id !== undefined ? data.kamar_id : existing.kamar_id
+    if (!(await canAccessKamar(c.env, user, targetKamarId))) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'KAMAR_NOT_IN_ASRAMA',
+        message: 'Kamar ini di luar lingkup asrama Anda.'
       } as ApiError, 403)
     }
   }
@@ -329,11 +357,11 @@ santri.put('/:id', zValidator('json', updateSchema), async (c) => {
 })
 
 // DELETE /api/kelas/:id — soft delete (status = keluar)
-santri.delete('/:id', async (c) => {
+santri.delete('/:id', requireCanMutate(), async (c) => {
   const santriId = c.req.param('id')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM santri WHERE id = ?').bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null }>()
+  const existing = await c.env.DB.prepare('SELECT s.*, km.jenis_kelamin as kamar_jenis_kelamin FROM santri s LEFT JOIN kamar km ON s.kamar_id = km.id WHERE s.id = ?').bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null; kamar_jenis_kelamin: 'L' | 'P' | null }>()
   if (!existing) {
     return c.json({
       error: 'Not Found',
@@ -352,6 +380,14 @@ santri.delete('/:id', async (c) => {
         error: 'Forbidden',
         code: 'SANTRI_NOT_ACCESSIBLE',
         message: 'Anda tidak memiliki akses untuk menghapus data santri ini.'
+      } as ApiError, 403)
+    }
+  } else if (user.role === 'kepala_asrama') {
+    if (!existing.kamar_jenis_kelamin || existing.kamar_jenis_kelamin !== user.asrama_jenis) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_ACCESSIBLE',
+        message: 'Santri ini di luar lingkup asrama Anda.'
       } as ApiError, 403)
     }
   }
@@ -373,13 +409,14 @@ const bulkSchema = z.object({
   santri: z.array(createSchema).min(1).max(500)
 })
 
-santri.post('/bulk', zValidator('json', bulkSchema), async (c) => {
+santri.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async (c) => {
   const { santri: santriList } = c.req.valid('json')
   const user = c.get('user')
 
   const results: Array<{ row: number; status: 'created' | 'error'; id?: string; error?: string }> = []
   const kelasCache = new Map<string, boolean>()
   const kamarCache = new Map<string, boolean>()
+  const asramaKamarCache = new Map<string, boolean>()
 
   for (let row = 0; row < santriList.length; row++) {
     const s = santriList[row]
@@ -391,6 +428,18 @@ santri.post('/bulk', zValidator('json', bulkSchema), async (c) => {
     if (user.role === 'ustadz' && s.kamar_id && !user.kamar_ids.includes(s.kamar_id)) {
       results.push({ row, status: 'error', error: 'KAMAR_NOT_ASSIGNED' })
       continue
+    }
+    // kepala_asrama: kamar harus di asramanya
+    if (user.role === 'kepala_asrama' && s.kamar_id) {
+      let allowed = asramaKamarCache.get(s.kamar_id)
+      if (allowed === undefined) {
+        allowed = await canAccessKamar(c.env, user, s.kamar_id)
+        asramaKamarCache.set(s.kamar_id, allowed)
+      }
+      if (!allowed) {
+        results.push({ row, status: 'error', error: 'KAMAR_NOT_IN_ASRAMA' })
+        continue
+      }
     }
 
     if (s.kelas_id) {

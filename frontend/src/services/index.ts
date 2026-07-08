@@ -67,6 +67,11 @@ export const adminService = {
   async getAuditLog(page = 1, limit = 50) {
     const response = await api.get('/admin/audit-log', { params: { page, limit } })
     return response.data
+  },
+
+  async assignRole(id: string, role: 'ustadz' | 'kyai' | 'kepala_asrama', asramaJenis?: 'L' | 'P') {
+    const response = await api.post(`/admin/users/${id}/assign-role`, { role, asrama_jenis: asramaJenis })
+    return response.data.data
   }
 }
 
@@ -283,5 +288,32 @@ export const dashboardService = {
   async perWaliKamarSantri(userId: string, params?: { dari?: string; sampai?: string }) {
     const response = await api.get(`/dashboard/per-wali-kamar/${userId}/santri`, { params })
     return response.data
+  }
+}
+
+export const pesanService = {
+  async send(data: { judul: string; isi: string; prioritas?: 'biasa' | 'penting'; penerima_id?: string; asrama_jenis?: 'L' | 'P' }) {
+    const response = await api.post('/pesan', data)
+    return response.data.data
+  },
+  async inbox(page = 1, limit = 50) {
+    const response = await api.get('/pesan/inbox', { params: { page, limit } })
+    return response.data
+  },
+  async sent(page = 1, limit = 50) {
+    const response = await api.get('/pesan/sent', { params: { page, limit } })
+    return response.data
+  },
+  async unreadCount() {
+    const response = await api.get('/pesan/unread-count')
+    return response.data.data
+  },
+  async get(id: string) {
+    const response = await api.get(`/pesan/${id}`)
+    return response.data.data
+  },
+  async recipients() {
+    const response = await api.get('/pesan/recipients/list')
+    return response.data.data
   }
 }

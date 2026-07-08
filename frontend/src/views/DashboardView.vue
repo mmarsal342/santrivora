@@ -11,6 +11,13 @@ interface DashboardSummary {
     pelanggaran_30hari: number
     prestasi_30hari: number
   }
+  per_asrama?: Array<{
+    jenis_kelamin: 'L' | 'P'
+    jumlah_santri: number
+    jumlah_kamar: number
+    pelanggaran: number
+    prestasi: number
+  }>
   per_kamar: Array<{
     nama: string
     pelanggaran: number
@@ -63,6 +70,17 @@ const auth = useAuthStore()
 const summary = ref<DashboardSummary | null>(null)
 const loading = ref(true)
 const error = ref('')
+
+// admin & kepala_asrama pakai dashboard gaya admin (kepala_asrama ter-scope via API)
+const showAdminDashboard = computed(() => auth.isAdmin || auth.isKepalaAsrama)
+
+const asramaCards = computed(() => {
+  const rows = summary.value?.per_asrama ?? []
+  return rows.map((r) => ({
+    label: r.jenis_kelamin === 'L' ? 'Asrama Putra' : 'Asrama Putri',
+    ...r
+  }))
+})
 
 const waliKamarList = ref<WaliKamarSummary[]>([])
 const loadingWali = ref(true)
@@ -248,9 +266,12 @@ async function loadTrends(period: TrendPeriod) {
 }
 
 onMounted(() => {
-  if (auth.isAdmin) {
+  if (showAdminDashboard.value) {
     loadSummary()
     loadWaliKamar()
+    loadTrends('7d')
+  } else if (auth.isKyai) {
+    loadSummary()
     loadTrends('7d')
   } else {
     loading.value = false
@@ -271,7 +292,7 @@ onMounted(() => {
         </p>
       </div>
       <button
-        v-if="auth.isAdmin"
+        v-if="showAdminDashboard || auth.isKyai"
         @click="loadSummary"
         :disabled="loading"
         class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
@@ -452,11 +473,170 @@ onMounted(() => {
       </section>
     </template>
 
-    <!-- Admin dashboard -->
-    <template v-if="auth.isAdmin">
+    <!-- Kyai dashboard — ringkasan statistik global, simpel -->
+    <template v-if="auth.isKyai">
+      <div v-if="error" class="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+        {{ error }}
+      </div>
+
+      <div v-if="loading && !summary" class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div v-for="i in 4" :key="i" class="animate-pulse rounded-xl border border-slate-200 bg-white p-5">
+          <div class="h-10 w-10 rounded-lg bg-slate-200"></div>
+          <div class="mt-4 h-7 w-20 rounded bg-slate-200"></div>
+          <div class="mt-2 h-4 w-32 rounded bg-slate-100"></div>
+        </div>
+      </div>
+
+      <template v-else>
+        <!-- Stat cards -->
+        <dl class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <div
+            v-for="card in statCards"
+            :key="card.label"
+            class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+          >
+            <div class="flex items-center gap-3">
+              <div
+                class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg"
+                :class="colorClasses[card.color].iconBg + ' ' + colorClasses[card.color].iconText"
+              >
+                <svg v-if="card.icon === 'users'" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6 0a3 3 0 10-3-3" />
+                </svg>
+                <svg v-else-if="card.icon === 'academic'" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 14l9-5-9-5-9 5 9 5z" />
+                </svg>
+                <svg v-else-if="card.icon === 'alert'" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" />
+                </svg>
+                <svg v-else class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 2l2.95 6.36L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l7.05-.91L12 2z" />
+                </svg>
+              </div>
+              <div>
+                <dt class="text-xs font-medium uppercase tracking-wide text-slate-500">{{ card.label }}</dt>
+                <dd class="text-2xl font-bold" :class="colorClasses[card.color].value">{{ card.value.toLocaleString('id-ID') }}</dd>
+              </div>
+            </div>
+          </div>
+        </dl>
+
+        <!-- Per asrama -->
+        <div v-if="asramaCards.length" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div
+            v-for="a in asramaCards"
+            :key="a.label"
+            class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+          >
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-semibold text-slate-900">{{ a.label }}</h3>
+              <span
+                class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
+                :class="a.jenis_kelamin === 'L' ? 'bg-blue-50 text-blue-700' : 'bg-pink-50 text-pink-700'"
+              >{{ a.jenis_kelamin === 'L' ? 'Putra' : 'Putri' }}</span>
+            </div>
+            <dl class="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <dt class="text-xs text-slate-400">Santri</dt>
+                <dd class="text-lg font-bold text-slate-800">{{ a.jumlah_santri }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-slate-400">Kamar</dt>
+                <dd class="text-lg font-bold text-slate-800">{{ a.jumlah_kamar }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-slate-400">Pelanggaran (30h)</dt>
+                <dd class="text-lg font-bold text-rose-600">{{ a.pelanggaran }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-slate-400">Prestasi (30h)</dt>
+                <dd class="text-lg font-bold text-amber-600">{{ a.prestasi }}</dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+
+        <!-- Tren ringkas -->
+        <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 class="text-base font-semibold text-slate-900">Tren Pelanggaran &amp; Prestasi</h2>
+              <p class="text-xs text-slate-500 mt-0.5">Perkembangan catatan disiplin</p>
+            </div>
+            <div class="flex gap-1 rounded-lg bg-slate-100 p-1">
+              <button
+                v-for="p in trendPeriods"
+                :key="p.value"
+                type="button"
+                @click="loadTrends(p.value)"
+                :disabled="loadingTrends"
+                class="rounded-md px-3 py-1.5 text-xs font-medium transition disabled:opacity-50"
+                :class="trendPeriod === p.value ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              >{{ p.label }}</button>
+            </div>
+          </div>
+          <div v-if="loadingTrends && !trends" class="p-5">
+            <div class="h-40 animate-pulse rounded-lg bg-slate-100"></div>
+          </div>
+          <div v-else-if="!trendChartData.length" class="p-10 text-center text-sm text-slate-400">
+            Belum ada data pada periode ini.
+          </div>
+          <div v-else class="p-5">
+            <div class="mb-3 flex items-center gap-4 text-xs text-slate-500">
+              <span class="inline-flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-rose-400"></span>Pelanggaran</span>
+              <span class="inline-flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-amber-400"></span>Prestasi</span>
+            </div>
+            <div class="overflow-x-auto">
+              <div class="flex h-40 items-end gap-2 pb-1" :style="{ minWidth: trendChartData.length * 28 + 'px' }">
+                <div
+                  v-for="(d, idx) in trendChartData"
+                  :key="d.date"
+                  class="flex h-full flex-1 flex-col items-center justify-end gap-1"
+                  :title="`${formatTrendDate(d.date)} — Pelanggaran: ${d.pelanggaran}, Prestasi: ${d.prestasi}`"
+                >
+                  <div class="flex h-full w-full items-end justify-center gap-0.5">
+                    <div class="w-2.5 rounded-t bg-rose-400" :style="{ height: trendBarHeight(d.pelanggaran) + '%' }"></div>
+                    <div class="w-2.5 rounded-t bg-amber-400" :style="{ height: trendBarHeight(d.prestasi) + '%' }"></div>
+                  </div>
+                  <span class="whitespace-nowrap text-[10px] text-slate-400" :class="{ invisible: idx % trendLabelStep !== 0 }">
+                    {{ formatTrendDate(d.date) }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- CTA pesan ke ustadz -->
+        <section class="rounded-xl border border-purple-200 bg-gradient-to-br from-purple-50 to-indigo-50 p-6">
+          <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 class="text-base font-semibold text-slate-900">Sampaikan pesan kepada ustadz</h2>
+              <p class="mt-1 text-sm text-slate-600">Kirim pengumuman, arahan, atau nasihat ke ustadz — bisa ke semua, per asrama, atau per orang.</p>
+            </div>
+            <button
+              @click="router.push('/pesan/compose')"
+              class="inline-flex shrink-0 items-center gap-2 rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-purple-700"
+            >
+              <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+              </svg>
+              Tulis Pesan
+            </button>
+          </div>
+        </section>
+      </template>
+    </template>
+
+    <!-- Admin / Kepala Asrama dashboard -->
+    <template v-if="showAdminDashboard">
       <!-- Error -->
       <div v-if="error" class="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
         {{ error }}
+      </div>
+
+      <div v-if="auth.isKepalaAsrama" class="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm text-sky-800">
+        <span class="font-medium">Lingkup: Asrama {{ auth.asramaLabel }}</span> — data di bawah ini terbatas pada asrama Anda.
       </div>
 
       <!-- Stat cards -->
@@ -501,6 +681,41 @@ onMounted(() => {
           <p class="mt-3 text-xs text-slate-400">{{ card.desc }}</p>
         </div>
       </dl>
+
+      <!-- Breakdown per asrama (admin only — kepala_asrama lihat cuma asramanya) -->
+      <div v-if="auth.isAdmin && asramaCards.length" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div
+          v-for="a in asramaCards"
+          :key="a.label"
+          class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+        >
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-semibold text-slate-900">{{ a.label }}</h3>
+            <span
+              class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
+              :class="a.jenis_kelamin === 'L' ? 'bg-blue-50 text-blue-700' : 'bg-pink-50 text-pink-700'"
+            >{{ a.jenis_kelamin === 'L' ? 'Putra' : 'Putri' }}</span>
+          </div>
+          <dl class="mt-3 grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <dt class="text-xs text-slate-400">Santri</dt>
+              <dd class="text-lg font-bold text-slate-800">{{ a.jumlah_santri }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs text-slate-400">Kamar</dt>
+              <dd class="text-lg font-bold text-slate-800">{{ a.jumlah_kamar }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs text-slate-400">Pelanggaran (30h)</dt>
+              <dd class="text-lg font-bold text-rose-600">{{ a.pelanggaran }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs text-slate-400">Prestasi (30h)</dt>
+              <dd class="text-lg font-bold text-amber-600">{{ a.prestasi }}</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
 
       <!-- Tren Pelanggaran & Prestasi -->
       <section class="rounded-xl border border-slate-200 bg-white shadow-sm">

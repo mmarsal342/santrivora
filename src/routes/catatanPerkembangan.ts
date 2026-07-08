@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
-import { authMiddleware } from '../middleware/auth'
+import { authMiddleware, requireCanMutate } from '../middleware/auth'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const catatanPerkembangan = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -36,8 +36,19 @@ async function assertAccess(
 
   if (!santri) return { ok: false, reason: 'SANTRI_NOT_FOUND', status: 404 }
 
-  if (user.role === 'admin') return { ok: true }
+  // admin & kyai = global
+  if (user.role === 'admin' || user.role === 'kyai') return { ok: true }
 
+  // kepala_asrama: santri harus di kamar asramanya
+  if (user.role === 'kepala_asrama') {
+    if (santri.kamar_id && user.asrama_jenis) {
+      const k = await env.DB.prepare('SELECT jenis_kelamin FROM kamar WHERE id = ?').bind(santri.kamar_id).first<{ jenis_kelamin: string }>()
+      if (k && k.jenis_kelamin === user.asrama_jenis) return { ok: true }
+    }
+    return { ok: false, reason: 'NOT_ASSIGNED', status: 403 }
+  }
+
+  // ustadz: kamar atau kelas
   if (santri.kamar_id && user.kamar_ids.includes(santri.kamar_id)) return { ok: true }
   if (santri.kelas_id && user.kelas_ids.includes(santri.kelas_id)) return { ok: true }
 
@@ -85,7 +96,7 @@ catatanPerkembangan.get('/', async (c) => {
 })
 
 // POST /api/catatan-perkembangan
-catatanPerkembangan.post('/', zValidator('json', createSchema), async (c) => {
+catatanPerkembangan.post('/', requireCanMutate(), zValidator('json', createSchema), async (c) => {
   const data = c.req.valid('json')
   const user = c.get('user')
 
@@ -111,7 +122,7 @@ catatanPerkembangan.post('/', zValidator('json', createSchema), async (c) => {
 })
 
 // PUT /api/catatan-perkembangan/:id
-catatanPerkembangan.put('/:id', zValidator('json', updateSchema), async (c) => {
+catatanPerkembangan.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async (c) => {
   const id = c.req.param('id')
   const data = c.req.valid('json')
   const user = c.get('user')
@@ -164,7 +175,7 @@ catatanPerkembangan.put('/:id', zValidator('json', updateSchema), async (c) => {
 })
 
 // DELETE /api/catatan-perkembangan/:id (soft delete)
-catatanPerkembangan.delete('/:id', async (c) => {
+catatanPerkembangan.delete('/:id', requireCanMutate(), async (c) => {
   const id = c.req.param('id')
   const user = c.get('user')
 
