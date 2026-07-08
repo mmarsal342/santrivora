@@ -139,7 +139,7 @@ const assignedKamar = computed(() => auth.user?.assigned_kamar ?? [])
 
 const router = useRouter()
 
-const todayKegiatan = ref<Array<{ id: string; nama: string; jenis?: string | null }>>([])
+const todayKegiatan = ref<Array<{ id: string; nama: string; jenis?: string | null; jadwal_kegiatan_id?: string | null }>>([])
 const loadingKegiatan = ref(false)
 const kamarSantri = ref<Array<{ id: string; nama_lengkap: string; jenis_kelamin: string; kamar_nama?: string }>>([])
 const loadingSantri = ref(false)
@@ -159,7 +159,7 @@ async function loadUstadzData() {
       kegiatanService.list({ tanggal: today }),
       ...kamarIds.map((kid) => santriService.list({ kamar_id: kid, status: 'aktif', limit: 50 }))
     ])
-    todayKegiatan.value = kegiatanData || []
+    todayKegiatan.value = (kegiatanData || []).filter((g: { jadwal_kegiatan_id?: string | null }) => !g.jadwal_kegiatan_id)
     kamarSantri.value = santriResults.flatMap((r) => r.data ?? [])
   } catch {
     // silent fail — dashboard masih jalan tanpa shortcut
@@ -365,8 +365,8 @@ onMounted(() => {
       <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4">
           <div>
-            <h2 class="text-base font-semibold text-slate-900">Kegiatan Hari Ini</h2>
-            <p class="text-xs text-slate-500 mt-0.5">Pilih untuk langsung absen</p>
+            <h2 class="text-base font-semibold text-slate-900">Kegiatan Khusus Hari Ini</h2>
+            <p class="text-xs text-slate-500 mt-0.5">Kegiatan non-rutin — klik untuk absen</p>
           </div>
           <span class="text-xs font-medium text-slate-400">{{ new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short' }) }}</span>
         </div>
@@ -400,7 +400,7 @@ onMounted(() => {
         </div>
 
         <div v-else class="p-8 text-center text-sm text-slate-400">
-          Tidak ada kegiatan hari ini.
+          Tidak ada kegiatan khusus hari ini.
         </div>
       </section>
 
