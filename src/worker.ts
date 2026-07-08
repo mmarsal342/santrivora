@@ -12,6 +12,7 @@ import { kegiatanRoutes } from './routes/kegiatan'
 import { jadwalKegiatanRoutes } from './routes/jadwalKegiatan'
 import { absensiRoutes } from './routes/absensi'
 import { catatanHaidRoutes } from './routes/catatanHaid'
+import { catatanPerkembanganRoutes } from './routes/catatanPerkembangan'
 import { dashboardRoutes } from './routes/dashboard'
 import { syncRoutes } from './routes/sync'
 import type { Env } from './types'
@@ -42,6 +43,7 @@ app.route('/api/kegiatan', kegiatanRoutes)
 app.route('/api/jadwal-kegiatan', jadwalKegiatanRoutes)
 app.route('/api/absensi', absensiRoutes)
 app.route('/api/catatan-haid', catatanHaidRoutes)
+app.route('/api/catatan-perkembangan', catatanPerkembanganRoutes)
 app.route('/api/dashboard', dashboardRoutes)
 app.route('/api/sync', syncRoutes)
 

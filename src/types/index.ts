@@ -130,3 +130,17 @@ export interface ApiError {
   }>
   retryAfter?: number
 }
+
+export interface CatatanPerkembangan {
+  id: string
+  santri_id: string
+  tanggal: string
+  kategori: 'Perkembangan' | 'Kesehatan' | 'Keluarga' | 'Sosial' | 'Akademik' | 'Spiritual'
+  judul: string
+  catatan: string | null
+  dicatat_oleh: string
+  dicatat_oleh_nama?: string
+  is_deleted: number
+  created_at: string
+  updated_at: string
+}

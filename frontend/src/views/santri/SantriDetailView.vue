@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { santriService, catatanService, kategoriService, catatanHaidService } from '@/services'
+import { santriService, catatanService, kategoriService, catatanHaidService, catatanPerkembanganService } from '@/services'
 
 interface Kategori {
   id: string
@@ -42,6 +42,17 @@ interface CatatanHaid {
   catatan?: string | null
 }
 
+interface CatatanPerkembangan {
+  id: string
+  tanggal: string
+  kategori: string
+  judul: string
+  catatan?: string | null
+  dicatat_oleh_nama?: string
+}
+
+type TabKey = 'disiplin' | 'perkembangan' | 'haid'
+
 const route = useRoute()
 const router = useRouter()
 const id = String(route.params.id)
@@ -73,6 +84,15 @@ const haidError = ref('')
 const savingHaid = ref(false)
 const haidForm = ref({ tanggal: today, status: 'suci' as 'suci' | 'haid', catatan: '' })
 
+const activeTab = ref<TabKey>('disiplin')
+const perkembanganList = ref<CatatanPerkembangan[]>([])
+const loadingPerkembangan = ref(false)
+const perkembanganError = ref('')
+const showPerkembanganModal = ref(false)
+const savingPerkembangan = ref(false)
+const kategoriPerkembanganOptions = ['Perkembangan', 'Kesehatan', 'Keluarga', 'Sosial', 'Akademik', 'Spiritual']
+const perkembanganForm = ref({ tanggal: today, kategori: 'Perkembangan', judul: '', catatan: '' })
+
 const statusLabels: Record<string, string> = {
   aktif: 'Aktif',
   lulus: 'Lulus',
@@ -95,6 +115,19 @@ const jumlahPrestasi = computed(() => sortedCatatan.value.filter((c) => c.tipe =
 const sortedCatatanHaid = computed(() =>
   [...catatanHaidList.value].sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''))
 )
+
+const sortedPerkembangan = computed(() =>
+  [...perkembanganList.value].sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''))
+)
+
+const kategoriPerkembanganStyle: Record<string, string> = {
+  Perkembangan: 'bg-emerald-50 text-emerald-700',
+  Kesehatan: 'bg-rose-50 text-rose-700',
+  Keluarga: 'bg-violet-50 text-violet-700',
+  Sosial: 'bg-sky-50 text-sky-700',
+  Akademik: 'bg-amber-50 text-amber-700',
+  Spiritual: 'bg-indigo-50 text-indigo-700',
+}
 
 function kelaminLabel(k: string) {
   return k === 'L' ? 'Laki-laki' : k === 'P' ? 'Perempuan' : '-'
@@ -252,6 +285,61 @@ async function removeHaid(haidId: string) {
   }
 }
 
+async function loadPerkembangan() {
+  loadingPerkembangan.value = true
+  perkembanganError.value = ''
+  try {
+    perkembanganList.value = await catatanPerkembanganService.list(id)
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    perkembanganError.value = err?.response?.data?.message || 'Gagal memuat catatan perkembangan.'
+  } finally {
+    loadingPerkembangan.value = false
+  }
+}
+
+function openPerkembanganModal() {
+  perkembanganForm.value = { tanggal: today, kategori: 'Perkembangan', judul: '', catatan: '' }
+  perkembanganError.value = ''
+  showPerkembanganModal.value = true
+}
+
+async function submitPerkembangan() {
+  perkembanganError.value = ''
+  if (!perkembanganForm.value.judul.trim()) {
+    perkembanganError.value = 'Judul wajib diisi.'
+    return
+  }
+  savingPerkembangan.value = true
+  try {
+    await catatanPerkembanganService.create({
+      santri_id: id,
+      tanggal: perkembanganForm.value.tanggal,
+      kategori: perkembanganForm.value.kategori,
+      judul: perkembanganForm.value.judul.trim(),
+      catatan: perkembanganForm.value.catatan.trim() || undefined,
+    })
+    showPerkembanganModal.value = false
+    await loadPerkembangan()
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    perkembanganError.value = err?.response?.data?.message || 'Gagal menambah catatan perkembangan.'
+  } finally {
+    savingPerkembangan.value = false
+  }
+}
+
+async function removePerkembangan(catatanId: string) {
+  if (!confirm('Hapus catatan ini?')) return
+  try {
+    await catatanPerkembanganService.remove(catatanId)
+    perkembanganList.value = perkembanganList.value.filter((c) => c.id !== catatanId)
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    perkembanganError.value = err?.response?.data?.message || 'Gagal menghapus catatan.'
+  }
+}
+
 async function removeCatatan(catatanId: string) {
   if (!confirm('Hapus catatan ini?')) return
   try {
@@ -268,6 +356,7 @@ async function removeCatatan(catatanId: string) {
 onMounted(() => {
   loadSantri()
   loadKategori()
+  loadPerkembangan()
 })
 </script>
 
@@ -358,8 +447,28 @@ onMounted(() => {
         </div>
       </section>
 
-      <!-- Disiplin summary + add -->
-      <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <!-- Tabs -->
+      <div class="flex gap-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+        <button
+          @click="activeTab = 'disiplin'"
+          class="flex-1 rounded-lg px-3 py-2 text-sm font-medium transition"
+          :class="activeTab === 'disiplin' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'"
+        >Disiplin</button>
+        <button
+          @click="activeTab = 'perkembangan'"
+          class="flex-1 rounded-lg px-3 py-2 text-sm font-medium transition"
+          :class="activeTab === 'perkembangan' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'"
+        >Perkembangan</button>
+        <button
+          v-if="santri.jenis_kelamin === 'P' && haidAccessible"
+          @click="activeTab = 'haid'"
+          class="flex-1 rounded-lg px-3 py-2 text-sm font-medium transition"
+          :class="activeTab === 'haid' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'"
+        >Suci/Haid</button>
+      </div>
+
+      <!-- Tab: Disiplin -->
+      <section v-if="activeTab === 'disiplin'" class="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 class="text-base font-semibold text-slate-900">Catatan Disiplin</h2>
@@ -450,8 +559,80 @@ onMounted(() => {
         </div>
       </section>
 
-      <!-- Catatan Haid (santri putri saja, ditampilkan kalau punya akses) -->
-      <section v-if="santri.jenis_kelamin === 'P' && haidAccessible" class="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <!-- Tab: Perkembangan -->
+      <section v-if="activeTab === 'perkembangan'" class="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div class="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 class="text-base font-semibold text-slate-900">Catatan Perkembangan</h2>
+            <p class="text-xs text-slate-500 mt-0.5">Perkembangan, kesehatan, kejadian khusus, dll</p>
+          </div>
+          <button
+            @click="openPerkembanganModal"
+            class="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+          >
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            Tambah Catatan
+          </button>
+        </div>
+
+        <div class="p-5">
+          <div v-if="perkembanganError" class="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ perkembanganError }}</div>
+
+          <div v-if="loadingPerkembangan" class="space-y-2">
+            <div v-for="i in 3" :key="i" class="h-16 animate-pulse rounded-lg bg-slate-100"></div>
+          </div>
+
+          <ol v-else-if="sortedPerkembangan.length" class="relative space-y-5 border-l-2 border-slate-100 pl-6">
+            <li v-for="c in sortedPerkembangan" :key="c.id" class="relative">
+              <span class="absolute -left-[1.95rem] flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 ring-4 ring-white">
+                <svg class="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </span>
+
+              <div class="rounded-lg border border-slate-200 bg-white p-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span
+                      class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold"
+                      :class="kategoriPerkembanganStyle[c.kategori] || 'bg-slate-100 text-slate-600'"
+                    >{{ c.kategori }}</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <time class="text-xs text-slate-400">{{ formatDateShort(c.tanggal) }}</time>
+                    <button
+                      @click="removePerkembangan(c.id)"
+                      title="Hapus catatan"
+                      class="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                    >
+                      <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <h3 class="mt-2 text-sm font-semibold text-slate-800">{{ c.judul }}</h3>
+                <p v-if="c.catatan" class="mt-1 text-sm text-slate-500">{{ c.catatan }}</p>
+                <p v-if="c.dicatat_oleh_nama" class="mt-1.5 text-xs text-slate-400">Dicatat oleh: {{ c.dicatat_oleh_nama }}</p>
+              </div>
+            </li>
+          </ol>
+
+          <div v-else class="py-10 text-center">
+            <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
+              <svg class="h-6 w-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </div>
+            <p class="mt-3 text-sm text-slate-500">Belum ada catatan perkembangan.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab: Haid -->
+      <section v-if="activeTab === 'haid' && santri.jenis_kelamin === 'P' && haidAccessible" class="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="border-b border-slate-100 px-5 py-4">
           <h2 class="text-base font-semibold text-slate-900">Catatan Suci/Haid</h2>
           <p class="text-xs text-slate-500 mt-0.5">Hanya terlihat oleh admin dan wali kamar putri terkait</p>
@@ -648,6 +829,86 @@ onMounted(() => {
                 class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
               >
                 {{ savingCatatan ? 'Menyimpan...' : 'Simpan Catatan' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Tambah Catatan Perkembangan Modal -->
+    <Teleport to="body">
+      <div v-if="showPerkembanganModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-slate-900/50" @click="!savingPerkembangan && (showPerkembanganModal = false)"></div>
+        <div class="relative w-full max-w-lg rounded-xl bg-white shadow-xl">
+          <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+            <h3 class="text-base font-semibold text-slate-900">Tambah Catatan Perkembangan</h3>
+            <button
+              @click="showPerkembanganModal = false"
+              :disabled="savingPerkembangan"
+              class="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            >
+              <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <form @submit.prevent="submitPerkembangan" class="space-y-4 px-5 py-4">
+            <div>
+              <label class="mb-1.5 block text-sm font-medium text-slate-700">Kategori <span class="text-rose-500">*</span></label>
+              <select
+                v-model="perkembanganForm.kategori"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 bg-white"
+              >
+                <option v-for="k in kategoriPerkembanganOptions" :key="k" :value="k">{{ k }}</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="mb-1.5 block text-sm font-medium text-slate-700">Judul <span class="text-rose-500">*</span></label>
+              <input
+                v-model="perkembanganForm.judul"
+                type="text"
+                placeholder="Mis. Mulai rutin hafalan baru"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+              />
+            </div>
+
+            <div>
+              <label class="mb-1.5 block text-sm font-medium text-slate-700">Catatan</label>
+              <textarea
+                v-model="perkembanganForm.catatan"
+                rows="3"
+                placeholder="Keterangan tambahan..."
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+              ></textarea>
+            </div>
+
+            <div>
+              <label class="mb-1.5 block text-sm font-medium text-slate-700">Tanggal <span class="text-rose-500">*</span></label>
+              <input
+                v-model="perkembanganForm.tanggal"
+                type="date"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+              />
+            </div>
+
+            <div v-if="perkembanganError" class="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ perkembanganError }}</div>
+
+            <div class="flex justify-end gap-3 border-t border-slate-100 pt-4">
+              <button
+                type="button"
+                @click="showPerkembanganModal = false"
+                :disabled="savingPerkembangan"
+                class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >Batal</button>
+              <button
+                type="submit"
+                :disabled="savingPerkembangan"
+                class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {{ savingPerkembangan ? 'Menyimpan...' : 'Simpan Catatan' }}
               </button>
             </div>
           </form>

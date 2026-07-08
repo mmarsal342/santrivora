@@ -165,6 +165,24 @@ export const catatanHaidService = {
   }
 }
 
+export const catatanPerkembanganService = {
+  async list(santriId: string) {
+    const response = await api.get('/catatan-perkembangan', { params: { santri_id: santriId } })
+    return response.data.data
+  },
+  async create(data: { santri_id: string; tanggal: string; kategori: string; judul: string; catatan?: string }) {
+    const response = await api.post('/catatan-perkembangan', data)
+    return response.data.data
+  },
+  async update(id: string, data: Record<string, unknown>) {
+    const response = await api.put(`/catatan-perkembangan/${id}`, data)
+    return response.data.data
+  },
+  async remove(id: string) {
+    await api.delete(`/catatan-perkembangan/${id}`)
+  }
+}
+
 export const kelasService = {
   async list() {
     const response = await api.get('/kelas')
