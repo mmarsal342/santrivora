@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { adminService, kamarService } from '@/services'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
 
 interface Kamar {
   id: string
@@ -12,7 +15,8 @@ interface User {
   id: string
   nama_lengkap: string
   email: string
-  role: 'admin' | 'ustadz'
+  role: 'admin' | 'ustadz' | 'kyai' | 'kepala_asrama'
+  asrama_jenis?: 'L' | 'P' | null
   status: 'pending' | 'approved' | 'suspended'
   assigned_kamar?: Kamar[]
 }
@@ -32,6 +36,10 @@ const approveSubmitting = ref(false)
 const resetTarget = ref<User | null>(null)
 const resetForm = reactive({ new_password: '' })
 const resetSubmitting = ref(false)
+
+const roleTarget = ref<User | null>(null)
+const roleForm = reactive<{ role: 'ustadz' | 'kyai' | 'kepala_asrama'; asrama_jenis: 'L' | 'P' }>({ role: 'ustadz', asrama_jenis: 'L' })
+const roleSubmitting = ref(false)
 
 const tabs: { key: TabStatus; label: string }[] = [
   { key: 'pending', label: 'Menunggu' },
@@ -126,10 +134,43 @@ async function submitReset() {
   }
 }
 
-function roleBadge(role: string) {
-  return role === 'admin'
-    ? 'bg-purple-100 text-purple-800'
-    : 'bg-blue-100 text-blue-800'
+function roleBadge(role: string): string {
+  switch (role) {
+    case 'admin': return 'bg-amber-100 text-amber-800'
+    case 'kyai': return 'bg-purple-100 text-purple-800'
+    case 'kepala_asrama': return 'bg-sky-100 text-sky-800'
+    default: return 'bg-blue-100 text-blue-800'
+  }
+}
+
+function roleLabel(role: string, asrama?: string | null): string {
+  switch (role) {
+    case 'admin': return 'Admin'
+    case 'kyai': return 'Kyai'
+    case 'kepala_asrama': return asrama === 'P' ? 'Kepala Putri' : asrama === 'L' ? 'Kepala Putra' : 'Kepala Asrama'
+    default: return 'Ustadz'
+  }
+}
+
+function openRole(u: User) {
+  roleTarget.value = u
+  roleForm.role = u.role === 'admin' ? 'ustadz' : u.role
+  roleForm.asrama_jenis = u.asrama_jenis || 'L'
+}
+
+async function submitRole() {
+  if (!roleTarget.value) return
+  roleSubmitting.value = true
+  try {
+    await adminService.assignRole(roleTarget.value.id, roleForm.role, roleForm.role === 'kepala_asrama' ? roleForm.asrama_jenis : undefined)
+    roleTarget.value = null
+    await fetchUsers()
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal mengubah peran'
+  } finally {
+    roleSubmitting.value = false
+  }
 }
 
 onMounted(() => {
@@ -197,7 +238,7 @@ onMounted(() => {
                 <p class="truncate text-sm text-gray-500">{{ u.email }}</p>
               </div>
               <span :class="['ml-1 inline-flex shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', roleBadge(u.role)]">
-                {{ u.role }}
+                {{ roleLabel(u.role, u.asrama_jenis) }}
               </span>
             </div>
 
@@ -224,6 +265,7 @@ onMounted(() => {
             </template>
             <template v-else-if="activeTab === 'approved'">
               <button
+                v-if="u.role !== 'admin'"
                 type="button"
                 @click="openApprove(u)"
                 class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
@@ -231,6 +273,15 @@ onMounted(() => {
                 Edit Kamar
               </button>
               <button
+                v-if="auth.isAdmin && u.role !== 'admin'"
+                type="button"
+                @click="openRole(u)"
+                class="rounded-lg border border-purple-300 bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-700 transition hover:bg-purple-100"
+              >
+                Atur Peran
+              </button>
+              <button
+                v-if="auth.isAdmin"
                 type="button"
                 @click="suspendUser(u.id)"
                 class="rounded-lg border border-yellow-300 bg-yellow-50 px-3 py-1.5 text-xs font-medium text-yellow-700 transition hover:bg-yellow-100"
@@ -238,6 +289,7 @@ onMounted(() => {
                 Tangguhkan
               </button>
               <button
+                v-if="auth.isAdmin"
                 type="button"
                 @click="openReset(u)"
                 class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
@@ -247,6 +299,7 @@ onMounted(() => {
             </template>
             <template v-else>
               <button
+                v-if="auth.isAdmin"
                 type="button"
                 @click="activateUser(u.id)"
                 class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700"
@@ -254,6 +307,7 @@ onMounted(() => {
                 Aktifkan
               </button>
               <button
+                v-if="auth.isAdmin"
                 type="button"
                 @click="openReset(u)"
                 class="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
@@ -348,6 +402,68 @@ onMounted(() => {
           <button
             type="button"
             @click="resetTarget = null"
+            class="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+          >
+            Batal
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Assign Role Modal -->
+    <div
+      v-if="roleTarget"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      @click.self="roleTarget = null"
+    >
+      <div class="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <h2 class="mb-1 text-lg font-semibold text-gray-900">Atur Peran</h2>
+        <p class="mb-4 text-sm text-gray-500">
+          Pilih peran untuk <strong>{{ roleTarget.nama_lengkap }}</strong>
+        </p>
+        <div class="mb-4 space-y-2">
+          <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition hover:bg-gray-50">
+            <input v-model="roleForm.role" type="radio" value="ustadz" class="h-4 w-4 text-emerald-600" />
+            <div>
+              <span class="text-sm font-medium text-gray-700">Ustadz</span>
+              <span class="block text-xs text-gray-400">Wali kamar (default)</span>
+            </div>
+          </label>
+          <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition hover:bg-gray-50">
+            <input v-model="roleForm.role" type="radio" value="kyai" class="h-4 w-4 text-emerald-600" />
+            <div>
+              <span class="text-sm font-medium text-gray-700">Kyai</span>
+              <span class="block text-xs text-gray-400">Akses baca semua statistik + kirim pesan</span>
+            </div>
+          </label>
+          <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition hover:bg-gray-50">
+            <input v-model="roleForm.role" type="radio" value="kepala_asrama" class="h-4 w-4 text-emerald-600" />
+            <div>
+              <span class="text-sm font-medium text-gray-700">Kepala Asrama</span>
+              <span class="block text-xs text-gray-400">Kelola satu asrama (putra/putri)</span>
+            </div>
+          </label>
+        </div>
+        <div v-if="roleForm.role === 'kepala_asrama'" class="mb-4">
+          <label class="mb-1 block text-sm font-medium text-gray-700">Asrama</label>
+          <select v-model="roleForm.asrama_jenis" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+            <option value="L">Putra</option>
+            <option value="P">Putri</option>
+          </select>
+          <p class="mt-1 text-xs text-amber-600">Memilih asrama yang sudah ada kepala asrama akan memindahkan otoritas secara otomatis.</p>
+        </div>
+        <div class="flex gap-3">
+          <button
+            type="button"
+            :disabled="roleSubmitting"
+            @click="submitRole"
+            class="flex-1 rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-purple-700 disabled:opacity-50"
+          >
+            {{ roleSubmitting ? 'Memproses...' : 'Simpan Peran' }}
+          </button>
+          <button
+            type="button"
+            @click="roleTarget = null"
             class="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
           >
             Batal

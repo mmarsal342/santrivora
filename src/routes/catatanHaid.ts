@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
-import { authMiddleware } from '../middleware/auth'
+import { authMiddleware, requireCanMutate } from '../middleware/auth'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const catatanHaid = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -15,9 +15,9 @@ const upsertSchema = z.object({
   catatan: z.string().max(500).optional()
 })
 
-// Admin + wali kamar dari kamar berjenis_kelamin 'P' saja yang boleh akses data ini.
-// Cek langsung ke DB (bukan cuma kamar_ids di token) supaya perubahan assignment
-// wali kamar terbaru ikut kepakai walau token lama belum di-refresh.
+// Admin & kyai (global), kepala_asrama putri (asramanya), serta wali kamar dari
+// kamar berjenis_kelamin 'P' saja yang boleh akses data ini.
+// Cek langsung ke DB supaya perubahan assignment terbaru ikut kepakai walau token lama.
 async function assertHaidAccess(
   env: Env,
   user: UserPayload,
@@ -32,7 +32,16 @@ async function assertHaidAccess(
   // doesn't make sense for a male santri regardless of who's writing it.
   if (santri.jenis_kelamin !== 'P') return { ok: false, reason: 'SANTRI_NOT_FEMALE' }
 
+  // admin = global read access. Kyai tidak lihat detail haid (data sensitif).
   if (user.role === 'admin') return { ok: true }
+  if (user.role === 'kyai') return { ok: false, reason: 'NOT_WALI_KAMAR_PUTRI' }
+
+  // kepala_asrama hanya yang putri
+  if (user.role === 'kepala_asrama') {
+    return user.asrama_jenis === 'P' ? { ok: true } : { ok: false, reason: 'NOT_WALI_KAMAR_PUTRI' }
+  }
+
+  // ustadz: cek assignment wali kamar putri via DB
   if (!santri.kamar_id) return { ok: false, reason: 'SANTRI_NO_KAMAR' }
 
   const waliKamar = await env.DB.prepare(
@@ -86,7 +95,7 @@ catatanHaid.get('/', async (c) => {
 })
 
 // POST /api/catatan-haid — catat/update status untuk satu tanggal (upsert per hari)
-catatanHaid.post('/', zValidator('json', upsertSchema), async (c) => {
+catatanHaid.post('/', requireCanMutate(), zValidator('json', upsertSchema), async (c) => {
   const data = c.req.valid('json')
   const user = c.get('user')
 
@@ -126,7 +135,7 @@ catatanHaid.post('/', zValidator('json', upsertSchema), async (c) => {
 })
 
 // DELETE /api/catatan-haid/:id — koreksi kesalahan input
-catatanHaid.delete('/:id', async (c) => {
+catatanHaid.delete('/:id', requireCanMutate(), async (c) => {
   const id = c.req.param('id')
   const user = c.get('user')
 

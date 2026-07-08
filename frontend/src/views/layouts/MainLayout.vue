@@ -9,6 +9,8 @@ interface NavItem {
   to: string
   icon: readonly string[]
   adminOnly?: boolean
+  managerOnly?: boolean
+  excludeKyai?: boolean
 }
 
 const route = useRoute()
@@ -28,6 +30,7 @@ const navItems: readonly NavItem[] = [
     name: 'absensi',
     label: 'Absen Hari Ini',
     to: '/absensi',
+    excludeKyai: true,
     icon: ['M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z']
   },
   {
@@ -53,13 +56,14 @@ const navItems: readonly NavItem[] = [
     name: 'kamar',
     label: 'Manajemen Kamar',
     to: '/kamar',
-    adminOnly: true,
+    managerOnly: true,
     icon: ['M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.5c0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75V15a.75.75 0 01.75-.75h3a.75.75 0 01.75.75v5.25c0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75V9.75']
   },
   {
     name: 'kegiatan',
     label: 'Kegiatan',
     to: '/kegiatan',
+    excludeKyai: true,
     icon: ['M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z']
   },
   {
@@ -80,8 +84,14 @@ const navItems: readonly NavItem[] = [
     name: 'users',
     label: 'Manajemen User',
     to: '/users',
-    adminOnly: true,
+    managerOnly: true,
     icon: ['M17.982 18.725A7.488 7.488 0 0012 15.75a7.488 7.488 0 00-5.982 2.975m11.963 0a9 9 0 10-11.963 0m11.963 0A8.966 8.966 0 0112 21a8.966 8.966 0 01-5.982-2.275M15 9.75a3 3 0 11-6 0 3 3 0 016 0z']
+  },
+  {
+    name: 'pesan',
+    label: 'Pesan',
+    to: '/pesan',
+    icon: ['M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75']
   },
   {
     name: 'audit-log',
@@ -98,8 +108,41 @@ const navItems: readonly NavItem[] = [
   }
 ]
 
+const roleLabel = computed(() => {
+  switch (auth.user?.role) {
+    case 'admin': return 'Administrator'
+    case 'kyai': return 'Kyai'
+    case 'kepala_asrama': return auth.asramaLabel ? `Kepala Asrama ${auth.asramaLabel}` : 'Kepala Asrama'
+    default: return 'Ustadz'
+  }
+})
+
+const roleBadgeClass = computed(() => {
+  switch (auth.user?.role) {
+    case 'admin': return 'bg-amber-100 text-amber-700'
+    case 'kyai': return 'bg-purple-100 text-purple-700'
+    case 'kepala_asrama': return 'bg-sky-100 text-sky-700'
+    default: return 'bg-emerald-200/30 text-emerald-100'
+  }
+})
+
+const roleBadgeClassLight = computed(() => {
+  switch (auth.user?.role) {
+    case 'admin': return 'bg-amber-100 text-amber-700'
+    case 'kyai': return 'bg-purple-100 text-purple-700'
+    case 'kepala_asrama': return 'bg-sky-100 text-sky-700'
+    default: return 'bg-emerald-100 text-emerald-700'
+  }
+})
+
 const visibleNavItems = computed<readonly NavItem[]>(() =>
-  navItems.filter((item) => !item.adminOnly || auth.isAdmin)
+  navItems.filter((item) => {
+    const role = auth.user?.role
+    if (item.adminOnly && role !== 'admin') return false
+    if (item.managerOnly && role !== 'admin' && role !== 'kepala_asrama') return false
+    if (item.excludeKyai && role === 'kyai') return false
+    return true
+  })
 )
 
 function isActive(to: string): boolean {
@@ -205,9 +248,9 @@ async function handleLogout(): Promise<void> {
             <p class="truncate text-sm font-medium text-white">{{ auth.user.nama_lengkap }}</p>
             <span
               class="mt-0.5 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
-              :class="auth.isAdmin ? 'bg-amber-100 text-amber-700' : 'bg-emerald-200/30 text-emerald-100'"
+              :class="roleBadgeClass"
             >
-              {{ auth.isAdmin ? 'Administrator' : 'Ustadz' }}
+              {{ roleLabel }}
             </span>
           </div>
         </div>
@@ -239,12 +282,7 @@ async function handleLogout(): Promise<void> {
           <div v-if="auth.user" class="hidden items-center gap-2.5 sm:flex">
             <div class="text-right leading-tight">
               <p class="text-sm font-medium text-slate-800">{{ auth.user.nama_lengkap }}</p>
-              <span
-                class="text-xs font-medium"
-                :class="auth.isAdmin ? 'text-amber-600' : 'text-emerald-600'"
-              >
-                {{ auth.isAdmin ? 'Administrator' : 'Ustadz' }}
-              </span>
+              <span class="text-xs font-medium text-slate-500">{{ roleLabel }}</span>
             </div>
             <div class="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-700">
               {{ auth.user.nama_lengkap.charAt(0).toUpperCase() }}
@@ -255,9 +293,9 @@ async function handleLogout(): Promise<void> {
           <span
             v-if="auth.user"
             class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium sm:hidden"
-            :class="auth.isAdmin ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'"
+            :class="roleBadgeClassLight"
           >
-            {{ auth.isAdmin ? 'Admin' : 'Ustadz' }}
+            {{ roleLabel }}
           </span>
 
           <!-- Logout -->

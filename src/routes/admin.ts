@@ -2,15 +2,20 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import { hashPassword } from '../services/auth'
-import { authMiddleware, requireRole } from '../middleware/auth'
+import { authMiddleware, requireRole, requireAnyRole } from '../middleware/auth'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const admin = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
 
-admin.use('*', authMiddleware, requireRole('admin'))
+admin.use('*', authMiddleware)
 
 const approveSchema = z.object({
   kamar_ids: z.array(z.string().uuid())
+})
+
+const assignRoleSchema = z.object({
+  role: z.enum(['ustadz', 'kyai', 'kepala_asrama']),
+  asrama_jenis: z.enum(['L', 'P']).optional()
 })
 
 const resetPasswordSchema = z.object({
@@ -24,20 +29,41 @@ const resetPasswordSchema = z.object({
 })
 
 // GET /api/admin/users — list users with optional status filter
-admin.get('/users', async (c) => {
+// admin: semua user; kepala_asrama: ustadz yang pegang kamar di asramanya
+admin.get('/users', requireAnyRole('admin', 'kepala_asrama'), async (c) => {
+  const user = c.get('user')
   const status = c.req.query('status')
   const page = parseInt(c.req.query('page') || '1')
   const limit = parseInt(c.req.query('limit') || '20')
   const offset = (page - 1) * limit
 
-  let query = 'SELECT id, email, nama_lengkap, role, status, last_login, created_at FROM users'
+  let query = 'SELECT id, email, nama_lengkap, role, asrama_jenis, status, last_login, created_at FROM users'
   let countQuery = 'SELECT COUNT(*) as total FROM users'
-  const params: string[] = []
+  const params: (string | number)[] = []
+  const whereParts: string[] = []
 
   if (status) {
-    query += ' WHERE status = ?'
-    countQuery += ' WHERE status = ?'
+    whereParts.push('status = ?')
     params.push(status)
+  }
+
+  // kepala_asrama: batasi ke ustadz yang pegang kamar di asramanya
+  if (user.role === 'kepala_asrama') {
+    query = `SELECT DISTINCT u.id, u.email, u.nama_lengkap, u.role, u.asrama_jenis, u.status, u.last_login, u.created_at
+             FROM users u
+             INNER JOIN ustadz_kamar uk ON uk.user_id = u.id
+             INNER JOIN kamar k ON uk.kamar_id = k.id AND k.jenis_kelamin = ?`
+    countQuery = `SELECT COUNT(DISTINCT u.id) as total
+                  FROM users u
+                  INNER JOIN ustadz_kamar uk ON uk.user_id = u.id
+                  INNER JOIN kamar k ON uk.kamar_id = k.id AND k.jenis_kelamin = ?`
+    params.unshift(user.asrama_jenis || '')
+    whereParts.push("u.role = 'ustadz'")
+  }
+
+  if (whereParts.length > 0) {
+    query += ' WHERE ' + whereParts.join(' AND ')
+    countQuery += ' WHERE ' + whereParts.join(' AND ')
   }
 
   query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
@@ -93,7 +119,7 @@ admin.get('/users', async (c) => {
 })
 
 // GET /api/admin/users/:id — detail user
-admin.get('/users/:id', async (c) => {
+admin.get('/users/:id', requireAnyRole('admin', 'kepala_asrama'), async (c) => {
   const userId = c.req.param('id')
 
   const user = await c.env.DB.prepare(
@@ -131,14 +157,14 @@ admin.get('/users/:id', async (c) => {
 
 // POST /api/admin/users/:id/approve — approve (idempotent) + assign wali kamar.
 // Dipanggil juga buat edit kamar user yang sudah approved, jadi gak ada endpoint terpisah.
-admin.post('/users/:id/approve', zValidator('json', approveSchema), async (c) => {
+admin.post('/users/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zValidator('json', approveSchema), async (c) => {
   const userId = c.req.param('id')
   const { kamar_ids } = c.req.valid('json')
   const adminUser = c.get('user')
 
   const user = await c.env.DB.prepare(
-    'SELECT id, status FROM users WHERE id = ?'
-  ).bind(userId).first<{ id: string; status: string }>()
+    'SELECT id, status, role FROM users WHERE id = ?'
+  ).bind(userId).first<{ id: string; status: string; role: string }>()
 
   if (!user) {
     return c.json({
@@ -146,6 +172,15 @@ admin.post('/users/:id/approve', zValidator('json', approveSchema), async (c) =>
       code: 'USER_NOT_FOUND',
       message: 'User tidak ditemukan.'
     } as ApiError, 404)
+  }
+
+  // kepala_asrama hanya bisa approve ustadz (bukan admin/kyai/kepala_asrama lain)
+  if (adminUser.role === 'kepala_asrama' && user.role !== 'ustadz') {
+    return c.json({
+      error: 'Forbidden',
+      code: 'INSUFFICIENT_PERMISSIONS',
+      message: 'Anda hanya dapat mengelola akun ustadz.'
+    } as ApiError, 403)
   }
 
   const isFirstApproval = user.status === 'pending'
@@ -158,12 +193,12 @@ admin.post('/users/:id/approve', zValidator('json', approveSchema), async (c) =>
     } as ApiError, 400)
   }
 
-  // Validate kamar exist (skip query kalau kosong — IN () bukan SQL yang valid)
+  // Validate kamar exist
   if (kamar_ids.length > 0) {
     const placeholders = kamar_ids.map(() => '?').join(',')
     const validKamar = await c.env.DB.prepare(
-      `SELECT id FROM kamar WHERE id IN (${placeholders}) AND is_active = 1`
-    ).bind(...kamar_ids).all()
+      `SELECT id, jenis_kelamin FROM kamar WHERE id IN (${placeholders}) AND is_active = 1`
+    ).bind(...kamar_ids).all<{ jenis_kelamin: string }>()
 
     if (validKamar.results.length !== kamar_ids.length) {
       return c.json({
@@ -171,6 +206,18 @@ admin.post('/users/:id/approve', zValidator('json', approveSchema), async (c) =>
         code: 'INVALID_KAMAR',
         message: 'Beberapa kamar tidak ditemukan atau tidak aktif.'
       } as ApiError, 400)
+    }
+
+    // kepala_asrama: semua kamar harus di asramanya
+    if (adminUser.role === 'kepala_asrama') {
+      const allInAsrama = validKamar.results.every((k) => k.jenis_kelamin === adminUser.asrama_jenis)
+      if (!allInAsrama) {
+        return c.json({
+          error: 'Forbidden',
+          code: 'KAMAR_NOT_IN_ASRAMA',
+          message: 'Anda hanya dapat mengassign kamar di asrama Anda.'
+        } as ApiError, 403)
+      }
     }
   }
 
@@ -208,8 +255,85 @@ admin.post('/users/:id/approve', zValidator('json', approveSchema), async (c) =>
   })
 })
 
+// POST /api/admin/users/:id/assign-role — admin only
+// Set peran kyai / kepala_asrama. Transfer kepala_asrama otomatis: kalau asrama
+// itu sudah ada kepala_asrama lain, yang lama turun jadi ustadz.
+admin.post('/users/:id/assign-role', requireRole('admin'), zValidator('json', assignRoleSchema), async (c) => {
+  const userId = c.req.param('id')
+  const { role, asrama_jenis } = c.req.valid('json')
+  const adminUser = c.get('user')
+
+  const target = await c.env.DB.prepare(
+    'SELECT id, role, asrama_jenis FROM users WHERE id = ?'
+  ).bind(userId).first<{ id: string; role: string; asrama_jenis: string | null }>()
+
+  if (!target) {
+    return c.json({
+      error: 'Not Found',
+      code: 'USER_NOT_FOUND',
+      message: 'User tidak ditemukan.'
+    } as ApiError, 404)
+  }
+
+  if (target.role === 'admin') {
+    return c.json({
+      error: 'Bad Request',
+      code: 'CANNOT_CHANGE_ADMIN',
+      message: 'Role admin tidak dapat diubah.'
+    } as ApiError, 400)
+  }
+
+  // Validasi: kepala_asrama wajib punya asrama_jenis
+  if (role === 'kepala_asrama' && !asrama_jenis) {
+    return c.json({
+      error: 'Bad Request',
+      code: 'ASRAMA_REQUIRED',
+      message: 'Kepala asrama wajib menentukan asrama (L/P).'
+    } as ApiError, 400)
+  }
+
+  // Transfer: kalau ada kepala_asrama lain di asrama yang sama, turunkan ke ustadz
+  if (role === 'kepala_asrama') {
+    const existing = await c.env.DB.prepare(
+      `SELECT id FROM users WHERE role = 'kepala_asrama' AND asrama_jenis = ? AND id != ?`
+    ).bind(asrama_jenis, userId).first<{ id: string }>()
+
+    if (existing) {
+      await c.env.DB.prepare(
+        `UPDATE users SET role = 'ustadz', asrama_jenis = NULL, updated_at = datetime('now') WHERE id = ?`
+      ).bind(existing.id).run()
+      await c.env.DB.prepare(
+        `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
+         VALUES (?, ?, 'user.demote_from_kepala', 'users', ?, ?)`
+      ).bind(crypto.randomUUID(), adminUser.sub, existing.id, JSON.stringify({ reason: 'transfer', to: userId })).run()
+    }
+  }
+
+  const newAsrama = role === 'kepala_asrama' ? asrama_jenis! : null
+  await c.env.DB.prepare(
+    `UPDATE users SET role = ?, asrama_jenis = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(role, newAsrama, userId).run()
+
+  // Revoke sessions supaya token baru (dengan role/asrama baru) wajib di-refresh
+  await c.env.DB.prepare('UPDATE sessions SET is_revoked = 1 WHERE user_id = ?').bind(userId).run()
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, old_value, new_value)
+     VALUES (?, ?, 'user.assign_role', 'users', ?, ?, ?)`
+  ).bind(
+    crypto.randomUUID(), adminUser.sub, userId,
+    JSON.stringify({ role: target.role, asrama_jenis: target.asrama_jenis }),
+    JSON.stringify({ role, asrama_jenis: newAsrama })
+  ).run()
+
+  return c.json({
+    message: 'Peran berhasil diperbarui.',
+    data: { id: userId, role, asrama_jenis: newAsrama }
+  })
+})
+
 // POST /api/admin/users/:id/suspend
-admin.post('/users/:id/suspend', async (c) => {
+admin.post('/users/:id/suspend', requireRole('admin'), async (c) => {
   const userId = c.req.param('id')
   const adminUser = c.get('user')
 
@@ -260,7 +384,7 @@ admin.post('/users/:id/suspend', async (c) => {
 })
 
 // POST /api/admin/users/:id/activate — reactivate suspended user
-admin.post('/users/:id/activate', async (c) => {
+admin.post('/users/:id/activate', requireRole('admin'), async (c) => {
   const userId = c.req.param('id')
   const adminUser = c.get('user')
 
@@ -277,7 +401,7 @@ admin.post('/users/:id/activate', async (c) => {
 })
 
 // POST /api/admin/users/:id/reset-password — admin resets user password
-admin.post('/users/:id/reset-password', zValidator('json', resetPasswordSchema), async (c) => {
+admin.post('/users/:id/reset-password', requireRole('admin'), zValidator('json', resetPasswordSchema), async (c) => {
   const userId = c.req.param('id')
   const { new_password } = c.req.valid('json')
   const adminUser = c.get('user')
@@ -317,7 +441,7 @@ admin.post('/users/:id/reset-password', zValidator('json', resetPasswordSchema),
 })
 
 // GET /api/admin/audit-log — view audit logs
-admin.get('/audit-log', async (c) => {
+admin.get('/audit-log', requireRole('admin'), async (c) => {
   const page = parseInt(c.req.query('page') || '1')
   const limit = parseInt(c.req.query('limit') || '50')
   const offset = (page - 1) * limit

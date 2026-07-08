@@ -1,28 +1,40 @@
 import { Hono } from 'hono'
-import { authMiddleware, requireRole } from '../middleware/auth'
+import { authMiddleware, requireAnyRole } from '../middleware/auth'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const dashboard = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
 
 dashboard.use('*', authMiddleware)
 
+// admin, kyai (global), kepala_asrama (asramanya) boleh lihat dashboard
+const dashboardRead = requireAnyRole('admin', 'kyai', 'kepala_asrama')
+
 // GET /api/dashboard/summary
-dashboard.get('/summary', requireRole('admin'), async (c) => {
-  const [totalSantri, totalKamar, totalPelanggaran, totalPrestasi, perKategori, perKamar, topPelanggar] = await Promise.all([
+dashboard.get('/summary', dashboardRead, async (c) => {
+  const user = c.get('user')
+  const aj = user.role === 'kepala_asrama' ? user.asrama_jenis : null
+
+  // Filter asrama untuk kepala_asrama. aj aman ('L'|'P') karena dari token kita sendiri.
+  const santriFilter = aj
+    ? `INNER JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'`
+    : ''
+  const kamarFilter = aj ? `AND jenis_kelamin = '${aj}'` : ''
+
+  const [totalSantri, totalKamar, totalPelanggaran, totalPrestasi, perKategori, perKamar, perAsrama, topPelanggar] = await Promise.all([
     c.env.DB.prepare(
-      "SELECT COUNT(*) as count FROM santri WHERE status = 'aktif'"
+      `SELECT COUNT(*) as count FROM santri s ${santriFilter} WHERE s.status = 'aktif'`
     ).first<{ count: number }>(),
 
     c.env.DB.prepare(
-      'SELECT COUNT(*) as count FROM kamar WHERE is_active = 1'
+      `SELECT COUNT(*) as count FROM kamar WHERE is_active = 1 ${kamarFilter}`
     ).first<{ count: number }>(),
 
     c.env.DB.prepare(
-      "SELECT COUNT(*) as count FROM catatan_disiplin WHERE tipe = 'pelanggaran' AND is_deleted = 0 AND date(tanggal_kejadian) >= date('now', '-30 days')"
+      `SELECT COUNT(*) as count FROM catatan_disiplin cd ${aj ? `INNER JOIN santri s ON cd.santri_id = s.id INNER JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'` : ''} WHERE cd.tipe = 'pelanggaran' AND cd.is_deleted = 0 AND date(cd.tanggal_kejadian) >= date('now', '-30 days')`
     ).first<{ count: number }>(),
 
     c.env.DB.prepare(
-      "SELECT COUNT(*) as count FROM catatan_disiplin WHERE tipe = 'prestasi' AND is_deleted = 0 AND date(tanggal_kejadian) >= date('now', '-30 days')"
+      `SELECT COUNT(*) as count FROM catatan_disiplin cd ${aj ? `INNER JOIN santri s ON cd.santri_id = s.id INNER JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'` : ''} WHERE cd.tipe = 'prestasi' AND cd.is_deleted = 0 AND date(cd.tanggal_kejadian) >= date('now', '-30 days')`
     ).first<{ count: number }>(),
 
     // Violations per kategori
@@ -32,14 +44,15 @@ dashboard.get('/summary', requireRole('admin'), async (c) => {
       LEFT JOIN catatan_disiplin cd ON cd.kategori_id = kp.id
         AND cd.tipe = 'pelanggaran' AND cd.is_deleted = 0
         AND date(cd.tanggal_kejadian) >= date('now', '-30 days')
-      WHERE kp.is_active = 1
+      ${aj ? `LEFT JOIN santri s ON cd.santri_id = s.id LEFT JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'` : ''}
+      WHERE kp.is_active = 1 ${aj ? 'AND (cd.id IS NULL OR k.id IS NOT NULL)' : ''}
       GROUP BY kp.id
       ORDER BY total DESC
     `).all(),
 
     // Per kamar breakdown
     c.env.DB.prepare(`
-      SELECT km.id, km.nama,
+      SELECT km.id, km.nama, km.jenis_kelamin,
         COUNT(CASE WHEN cd.tipe = 'pelanggaran' THEN 1 END) as pelanggaran,
         COUNT(CASE WHEN cd.tipe = 'prestasi' THEN 1 END) as prestasi,
         COUNT(DISTINCT s.id) as jumlah_santri
@@ -47,9 +60,25 @@ dashboard.get('/summary', requireRole('admin'), async (c) => {
       LEFT JOIN santri s ON s.kamar_id = km.id AND s.status = 'aktif'
       LEFT JOIN catatan_disiplin cd ON cd.santri_id = s.id AND cd.is_deleted = 0
         AND date(cd.tanggal_kejadian) >= date('now', '-30 days')
-      WHERE km.is_active = 1
+      WHERE km.is_active = 1 ${kamarFilter}
       GROUP BY km.id
       ORDER BY km.nama
+    `).all(),
+
+    // Per asrama breakdown (putra/putri) — kepala_asrama cuma lihat asramanya
+    c.env.DB.prepare(`
+      SELECT
+        km.jenis_kelamin,
+        COUNT(DISTINCT s.id) as jumlah_santri,
+        COUNT(DISTINCT km.id) as jumlah_kamar,
+        COUNT(CASE WHEN cd.tipe = 'pelanggaran' THEN 1 END) as pelanggaran,
+        COUNT(CASE WHEN cd.tipe = 'prestasi' THEN 1 END) as prestasi
+      FROM kamar km
+      LEFT JOIN santri s ON s.kamar_id = km.id AND s.status = 'aktif'
+      LEFT JOIN catatan_disiplin cd ON cd.santri_id = s.id AND cd.is_deleted = 0
+        AND date(cd.tanggal_kejadian) >= date('now', '-30 days')
+      WHERE km.is_active = 1 ${kamarFilter}
+      GROUP BY km.jenis_kelamin
     `).all(),
 
     // Top santri with most violations
@@ -60,7 +89,7 @@ dashboard.get('/summary', requireRole('admin'), async (c) => {
       INNER JOIN catatan_disiplin cd ON cd.santri_id = s.id
         AND cd.tipe = 'pelanggaran' AND cd.is_deleted = 0
         AND date(cd.tanggal_kejadian) >= date('now', '-30 days')
-      WHERE s.status = 'aktif'
+      WHERE s.status = 'aktif' ${aj ? `AND km.jenis_kelamin = '${aj}'` : ''}
       GROUP BY s.id
       ORDER BY total DESC
       LIMIT 10
@@ -75,6 +104,7 @@ dashboard.get('/summary', requireRole('admin'), async (c) => {
         pelanggaran_30hari: totalPelanggaran?.count || 0,
         prestasi_30hari: totalPrestasi?.count || 0
       },
+      per_asrama: perAsrama.results,
       per_kategori: perKategori.results,
       per_kamar: perKamar.results,
       top_pelanggar: topPelanggar.results
@@ -83,7 +113,9 @@ dashboard.get('/summary', requireRole('admin'), async (c) => {
 })
 
 // GET /api/dashboard/trends?period=7d
-dashboard.get('/trends', requireRole('admin'), async (c) => {
+dashboard.get('/trends', dashboardRead, async (c) => {
+  const user = c.get('user')
+  const aj = user.role === 'kepala_asrama' ? user.asrama_jenis : null
   const period = c.req.query('period') || '7d'
   let days = 7
   if (period === '30d') days = 30
@@ -91,14 +123,15 @@ dashboard.get('/trends', requireRole('admin'), async (c) => {
 
   const trends = await c.env.DB.prepare(`
     SELECT
-      date(tanggal_kejadian) as date,
-      tipe,
+      date(cd.tanggal_kejadian) as date,
+      cd.tipe,
       COUNT(*) as total
-    FROM catatan_disiplin
-    WHERE is_deleted = 0
-      AND date(tanggal_kejadian) >= date('now', '-${days} days')
-    GROUP BY date(tanggal_kejadian), tipe
-    ORDER BY date ASC
+    FROM catatan_disiplin cd
+    ${aj ? `INNER JOIN santri s ON cd.santri_id = s.id INNER JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'` : ''}
+    WHERE cd.is_deleted = 0
+      AND date(cd.tanggal_kejadian) >= date('now', '-${days} days')
+    GROUP BY date(cd.tanggal_kejadian), cd.tipe
+    ORDER BY date(cd.tanggal_kejadian) ASC
   `).all()
 
   return c.json({
@@ -119,10 +152,6 @@ function defaultDateRange(c: { req: { query: (k: string) => string | undefined }
 }
 
 // Rekap absensi + disiplin + flag "butuh diperhatikan" untuk sekumpulan kamar.
-// Absensi dihitung dari sisi KAMAR (bukan kelas) — itu domain operasional
-// harian pondok. Disiplin (pelanggaran/prestasi) tetap ikut ditampilkan
-// walau pencatatannya tetap wewenang wali kelas, karena wali kamar tetap
-// perlu gambaran utuh soal santrinya sendiri.
 async function computeKamarStats(env: Env, kamarIds: string[], dari: string, sampai: string) {
   if (kamarIds.length === 0) {
     return {
@@ -168,7 +197,6 @@ async function computeKamarStats(env: Env, kamarIds: string[], dari: string, sam
     if (row.tipe in disiplin) disiplin[row.tipe] = row.jumlah
   }
 
-  // Flag: santri alpa 3x atau lebih dalam periode ini
   const alpaRows = await env.DB.prepare(`
     SELECT s.id, s.nama_lengkap, COUNT(*) as jumlah_alpa
     FROM absensi a
@@ -195,27 +223,32 @@ async function computeKamarStats(env: Env, kamarIds: string[], dari: string, sam
   }
 }
 
-// GET /api/dashboard/per-wali-kamar?dari=&sampai= — ringkasan tiap wali kamar (buat tab-tab di UI)
-dashboard.get('/per-wali-kamar', requireRole('admin'), async (c) => {
+// GET /api/dashboard/per-wali-kamar?dari=&sampai=
+// admin/kyai: semua ustadz. kepala_asrama: cuma ustadz yang pegang kamar di asramanya.
+dashboard.get('/per-wali-kamar', dashboardRead, async (c) => {
+  const user = c.get('user')
+  const aj = user.role === 'kepala_asrama' ? user.asrama_jenis : null
   const { dari, sampai } = defaultDateRange(c)
 
   const waliList = await c.env.DB.prepare(
-    `SELECT id, email, nama_lengkap, status FROM users WHERE role = 'ustadz' ORDER BY nama_lengkap ASC`
+    `SELECT DISTINCT u.id, u.email, u.nama_lengkap, u.status
+     FROM users u
+     INNER JOIN ustadz_kamar uk ON uk.user_id = u.id
+     INNER JOIN kamar k ON uk.kamar_id = k.id AND k.is_active = 1
+     WHERE u.role = 'ustadz' ${aj ? `AND k.jenis_kelamin = '${aj}'` : ''}
+     ORDER BY u.nama_lengkap ASC`
   ).all<{ id: string; email: string; nama_lengkap: string; status: string }>()
 
   const data = []
   for (const u of waliList.results || []) {
     const kamarAssignments = await c.env.DB.prepare(
-      `SELECT k.id, k.nama, k.jenis_kelamin FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = ? AND k.is_active = 1`
+      `SELECT k.id, k.nama, k.jenis_kelamin FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = ? AND k.is_active = 1 ${aj ? `AND k.jenis_kelamin = '${aj}'` : ''}`
     ).bind(u.id).all<{ id: string; nama: string; jenis_kelamin: string }>()
     const kamarRows = kamarAssignments.results || []
     const kamarIds = kamarRows.map((k) => k.id)
 
     const stats = await computeKamarStats(c.env, kamarIds, dari, sampai)
 
-    // Info tambahan buat kamar putri: berapa entri suci/haid yang udah tercatat
-    // di periode ini — cuma jumlah, bukan detail per-tanggal (tetap dijaga
-    // sensitivitasnya walau ditampilin ke admin)
     let catatanHaidTercatat: number | null = null
     const kamarPutriIds = kamarRows.filter((k) => k.jenis_kelamin === 'P').map((k) => k.id)
     if (kamarPutriIds.length > 0) {
@@ -242,8 +275,10 @@ dashboard.get('/per-wali-kamar', requireRole('admin'), async (c) => {
   return c.json({ data, period: { dari, sampai } })
 })
 
-// GET /api/dashboard/per-wali-kamar/:userId/santri?dari=&sampai= — drill-down per santri
-dashboard.get('/per-wali-kamar/:userId/santri', requireRole('admin'), async (c) => {
+// GET /api/dashboard/per-wali-kamar/:userId/santri?dari=&sampai=
+dashboard.get('/per-wali-kamar/:userId/santri', dashboardRead, async (c) => {
+  const user = c.get('user')
+  const aj = user.role === 'kepala_asrama' ? user.asrama_jenis : null
   const userId = c.req.param('userId')
   const { dari, sampai } = defaultDateRange(c)
 
@@ -260,11 +295,12 @@ dashboard.get('/per-wali-kamar/:userId/santri', requireRole('admin'), async (c) 
   }
 
   const kamarAssignments = await c.env.DB.prepare(
-    `SELECT kamar_id FROM ustadz_kamar WHERE user_id = ?`
+    `SELECT uk.kamar_id FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = ? ${aj ? `AND k.jenis_kelamin = '${aj}'` : ''}`
   ).bind(userId).all<{ kamar_id: string }>()
   const kamarIds = (kamarAssignments.results || []).map((r) => r.kamar_id)
 
   if (kamarIds.length === 0) {
+    // kepala_asrama yang akses ustadz di luar asramanya → kosong
     return c.json({ data: { wali_kamar: wali, santri: [] }, period: { dari, sampai } })
   }
 
@@ -295,8 +331,6 @@ dashboard.get('/per-wali-kamar/:userId/santri', requireRole('admin'), async (c) 
       GROUP BY cd.santri_id, kp.id
     `).bind(...santriIds, dari, sampai).all<{ santri_id: string; kategori_id: string | null; kategori_nama: string | null; jumlah: number }>(),
 
-    // jenis_prestasi bebas ketik (bukan dropdown tetap) — dikelompokkan apa
-    // adanya berdasarkan teks yang sama persis
     c.env.DB.prepare(`
       SELECT santri_id, jenis_prestasi, COUNT(*) as jumlah FROM catatan_disiplin
       WHERE santri_id IN (${sph}) AND tipe = 'prestasi' AND is_deleted = 0

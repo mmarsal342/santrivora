@@ -1,6 +1,6 @@
 import { Context, Next } from 'hono'
 import { verifyAccessToken } from '../services/auth'
-import type { ApiError, Env, UserPayload } from '../types'
+import type { ApiError, Env, Role, UserPayload } from '../types'
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -44,7 +44,7 @@ export const authMiddleware = async (c: Context<{ Bindings: Env; Variables: { us
   await next()
 }
 
-export const requireRole = (role: 'admin' | 'ustadz') => {
+export const requireRole = (role: Role) => {
   return async (c: Context<{ Bindings: Env; Variables: { user: UserPayload } }>, next: Next) => {
     const user = c.get('user')
     if (user.role !== role) {
@@ -57,3 +57,17 @@ export const requireRole = (role: 'admin' | 'ustadz') => {
     await next()
   }
 }
+
+// Re-export scope helpers supaya bisa di-import dari satu tempat
+export {
+  requireAnyRole,
+  requireAdmin,
+  requireCanMutate,
+  isGlobalRead,
+  isPrivileged,
+  isReadOnly,
+  canMutate,
+  resolveKamarScope,
+  asramaMatches,
+  canAccessKamar
+} from '../lib/scope'

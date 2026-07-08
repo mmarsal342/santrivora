@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
-import { authMiddleware } from '../middleware/auth'
+import { authMiddleware, requireCanMutate } from '../middleware/auth'
+import { resolveKamarScope } from '../lib/scope'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const catatan = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -37,19 +38,22 @@ catatan.get('/', async (c) => {
   const conditions: string[] = ['cd.is_deleted = 0']
   const params: unknown[] = []
 
-  if (user.role === 'ustadz') {
+  // Scope: ustadz (kelas/kamar) & kepala_asrama (kamar asramanya). kyai/admin = global.
+  const scopedKamarIds = await resolveKamarScope(c.env, user)
+  if (scopedKamarIds !== null) {
     const scopeParts: string[] = []
-    if (user.kelas_ids.length > 0) {
+    if (user.role === 'ustadz' && user.kelas_ids.length > 0) {
       scopeParts.push(`s.kelas_id IN (${user.kelas_ids.map(() => '?').join(',')})`)
+      params.push(...user.kelas_ids)
     }
-    if (user.kamar_ids.length > 0) {
-      scopeParts.push(`s.kamar_id IN (${user.kamar_ids.map(() => '?').join(',')})`)
+    if (scopedKamarIds.length > 0) {
+      scopeParts.push(`s.kamar_id IN (${scopedKamarIds.map(() => '?').join(',')})`)
+      params.push(...scopedKamarIds)
     }
     if (scopeParts.length === 0) {
       return c.json({ data: [], pagination: { cursor: null, hasMore: false } })
     }
     conditions.push(`(${scopeParts.join(' OR ')})`)
-    params.push(...user.kelas_ids, ...user.kamar_ids)
   }
 
   if (santri_id) {
@@ -112,14 +116,16 @@ catatan.get('/:id', async (c) => {
 
   const result = await c.env.DB.prepare(`
     SELECT cd.*, s.nama_lengkap as santri_nama, s.kelas_id, s.kamar_id,
+           km.jenis_kelamin as kamar_jenis_kelamin,
            kp.nama as kategori_nama, kp.urutan_keparahan,
            u.nama_lengkap as dicatat_oleh_nama
     FROM catatan_disiplin cd
     INNER JOIN santri s ON cd.santri_id = s.id
+    LEFT JOIN kamar km ON s.kamar_id = km.id
     LEFT JOIN kategori_pelanggaran kp ON cd.kategori_id = kp.id
     LEFT JOIN users u ON cd.dicatat_oleh = u.id
     WHERE cd.id = ? AND cd.is_deleted = 0
-  `).bind(id).first<{ kelas_id: string | null; kamar_id: string | null }>()
+  `).bind(id).first<{ kelas_id: string | null; kamar_id: string | null; kamar_jenis_kelamin: 'L' | 'P' | null }>()
 
   if (!result) {
     return c.json({
@@ -140,20 +146,29 @@ catatan.get('/:id', async (c) => {
         message: 'Anda tidak memiliki akses ke catatan ini.'
       } as ApiError, 403)
     }
+  } else if (user.role === 'kepala_asrama') {
+    if (!result.kamar_jenis_kelamin || result.kamar_jenis_kelamin !== user.asrama_jenis) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_ACCESSIBLE',
+        message: 'Catatan ini di luar lingkup asrama Anda.'
+      } as ApiError, 403)
+    }
   }
 
   return c.json({ data: result })
 })
 
 // POST /api/catatan
-catatan.post('/', zValidator('json', createSchema), async (c) => {
+catatan.post('/', requireCanMutate(), zValidator('json', createSchema), async (c) => {
   const data = c.req.valid('json')
   const user = c.get('user')
 
   // Validate santri exists
   const santri = await c.env.DB.prepare(
-    "SELECT id, kelas_id, kamar_id, status FROM santri WHERE id = ?"
-  ).bind(data.santri_id).first<{ kelas_id: string | null; kamar_id: string | null; status: string }>()
+    `SELECT s.id, s.kelas_id, s.kamar_id, s.status, km.jenis_kelamin as kamar_jenis_kelamin
+     FROM santri s LEFT JOIN kamar km ON s.kamar_id = km.id WHERE s.id = ?`
+  ).bind(data.santri_id).first<{ kelas_id: string | null; kamar_id: string | null; status: string; kamar_jenis_kelamin: 'L' | 'P' | null }>()
 
   if (!santri) {
     return c.json({
@@ -181,6 +196,14 @@ catatan.post('/', zValidator('json', createSchema), async (c) => {
         error: 'Forbidden',
         code: 'SANTRI_NOT_IN_ASSIGNED_SCOPE',
         message: 'Anda tidak dapat mencatat untuk santri di luar kelas/kamar Anda.'
+      } as ApiError, 403)
+    }
+  } else if (user.role === 'kepala_asrama') {
+    if (!santri.kamar_jenis_kelamin || santri.kamar_jenis_kelamin !== user.asrama_jenis) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_IN_ASSIGNED_SCOPE',
+        message: 'Santri ini di luar lingkup asrama Anda.'
       } as ApiError, 403)
     }
   }
@@ -225,17 +248,18 @@ catatan.post('/', zValidator('json', createSchema), async (c) => {
 })
 
 // PUT /api/catatan/:id
-catatan.put('/:id', zValidator('json', updateSchema), async (c) => {
+catatan.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async (c) => {
   const id = c.req.param('id')
   const data = c.req.valid('json')
   const user = c.get('user')
 
   const existing = await c.env.DB.prepare(`
-    SELECT cd.*, s.kelas_id, s.kamar_id
+    SELECT cd.*, s.kelas_id, s.kamar_id, km.jenis_kelamin as kamar_jenis_kelamin
     FROM catatan_disiplin cd
     INNER JOIN santri s ON cd.santri_id = s.id
+    LEFT JOIN kamar km ON s.kamar_id = km.id
     WHERE cd.id = ? AND cd.is_deleted = 0
-  `).bind(id).first<{ kelas_id: string | null; kamar_id: string | null }>()
+  `).bind(id).first<{ kelas_id: string | null; kamar_id: string | null; kamar_jenis_kelamin: 'L' | 'P' | null }>()
 
   if (!existing) {
     return c.json({
@@ -255,6 +279,14 @@ catatan.put('/:id', zValidator('json', updateSchema), async (c) => {
         error: 'Forbidden',
         code: 'SANTRI_NOT_ACCESSIBLE',
         message: 'Anda tidak memiliki akses untuk mengubah catatan ini.'
+      } as ApiError, 403)
+    }
+  } else if (user.role === 'kepala_asrama') {
+    if (!existing.kamar_jenis_kelamin || existing.kamar_jenis_kelamin !== user.asrama_jenis) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_ACCESSIBLE',
+        message: 'Catatan ini di luar lingkup asrama Anda.'
       } as ApiError, 403)
     }
   }
@@ -289,16 +321,17 @@ catatan.put('/:id', zValidator('json', updateSchema), async (c) => {
 })
 
 // DELETE /api/catatan/:id — soft delete
-catatan.delete('/:id', async (c) => {
+catatan.delete('/:id', requireCanMutate(), async (c) => {
   const id = c.req.param('id')
   const user = c.get('user')
 
   const existing = await c.env.DB.prepare(`
-    SELECT cd.*, s.kelas_id, s.kamar_id
+    SELECT cd.*, s.kelas_id, s.kamar_id, km.jenis_kelamin as kamar_jenis_kelamin
     FROM catatan_disiplin cd
     INNER JOIN santri s ON cd.santri_id = s.id
+    LEFT JOIN kamar km ON s.kamar_id = km.id
     WHERE cd.id = ? AND cd.is_deleted = 0
-  `).bind(id).first<{ kelas_id: string | null; kamar_id: string | null }>()
+  `).bind(id).first<{ kelas_id: string | null; kamar_id: string | null; kamar_jenis_kelamin: 'L' | 'P' | null }>()
 
   if (!existing) {
     return c.json({
@@ -318,6 +351,14 @@ catatan.delete('/:id', async (c) => {
         error: 'Forbidden',
         code: 'SANTRI_NOT_ACCESSIBLE',
         message: 'Anda tidak memiliki akses untuk menghapus catatan ini.'
+      } as ApiError, 403)
+    }
+  } else if (user.role === 'kepala_asrama') {
+    if (!existing.kamar_jenis_kelamin || existing.kamar_jenis_kelamin !== user.asrama_jenis) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'SANTRI_NOT_ACCESSIBLE',
+        message: 'Catatan ini di luar lingkup asrama Anda.'
       } as ApiError, 403)
     }
   }

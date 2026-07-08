@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
-import { authMiddleware } from '../middleware/auth'
+import { authMiddleware, requireCanMutate } from '../middleware/auth'
+import { resolveKamarScope, canAccessKamar } from '../lib/scope'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const absensi = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -28,7 +29,7 @@ const updateSchema = z.object({
 // POST /api/absensi/bulk — tandai kehadiran sekamar/kegiatan sekaligus
 // Absensi ini berbasis KAMAR (wali kamar), bukan kelas — kelas dipertahankan
 // khusus buat catatan disiplin akademik (lihat routes/catatan.ts).
-absensi.post('/bulk', zValidator('json', bulkSchema), async (c) => {
+absensi.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async (c) => {
   const { tanggal, kegiatan_id, items } = c.req.valid('json')
   const user = c.get('user')
 
@@ -59,6 +60,10 @@ absensi.post('/bulk', zValidator('json', bulkSchema), async (c) => {
 
     if (user.role === 'ustadz' && santri.kamar_id && !user.kamar_ids.includes(santri.kamar_id)) {
       results.push({ santri_id: item.santri_id, status: 'error', error: 'KAMAR_NOT_ASSIGNED' })
+      continue
+    }
+    if (user.role === 'kepala_asrama' && !(await canAccessKamar(c.env, user, santri.kamar_id))) {
+      results.push({ santri_id: item.santri_id, status: 'error', error: 'KAMAR_NOT_IN_ASRAMA' })
       continue
     }
 
@@ -106,13 +111,15 @@ absensi.get('/', async (c) => {
   const conditions: string[] = []
   const params: unknown[] = []
 
-  if (user.role === 'ustadz') {
-    if (user.kamar_ids.length === 0) {
+  // Scope: ustadz/kepala_asrama by kamar. kyai/admin = global.
+  const scopedKamarIds = await resolveKamarScope(c.env, user)
+  if (scopedKamarIds !== null) {
+    if (scopedKamarIds.length === 0) {
       return c.json({ data: [], pagination: { cursor: null, hasMore: false } })
     }
-    const ph = user.kamar_ids.map(() => '?').join(',')
+    const ph = scopedKamarIds.map(() => '?').join(',')
     conditions.push(`s.kamar_id IN (${ph})`)
-    params.push(...user.kamar_ids)
+    params.push(...scopedKamarIds)
   }
 
   if (santri_id) {
@@ -120,11 +127,11 @@ absensi.get('/', async (c) => {
     params.push(santri_id)
   }
   if (kamar_id) {
-    if (user.role === 'ustadz' && !user.kamar_ids.includes(kamar_id)) {
+    if (!(await canAccessKamar(c.env, user, kamar_id))) {
       return c.json({
         error: 'Forbidden',
         code: 'KAMAR_NOT_ASSIGNED',
-        message: 'Anda bukan wali kamar ini.'
+        message: 'Anda tidak memiliki akses ke kamar ini.'
       } as ApiError, 403)
     }
     conditions.push('s.kamar_id = ?')
@@ -185,21 +192,22 @@ absensi.get('/rekap', async (c) => {
   const conditions: string[] = ['a.tanggal BETWEEN ? AND ?']
   const params: unknown[] = [dari, sampai]
 
-  if (user.role === 'ustadz') {
-    if (user.kamar_ids.length === 0) {
+  const scopedKamarIds = await resolveKamarScope(c.env, user)
+  if (scopedKamarIds !== null) {
+    if (scopedKamarIds.length === 0) {
       return c.json({ data: [] })
     }
-    const ph = user.kamar_ids.map(() => '?').join(',')
+    const ph = scopedKamarIds.map(() => '?').join(',')
     conditions.push(`s.kamar_id IN (${ph})`)
-    params.push(...user.kamar_ids)
+    params.push(...scopedKamarIds)
   }
 
   if (kamar_id) {
-    if (user.role === 'ustadz' && !user.kamar_ids.includes(kamar_id)) {
+    if (!(await canAccessKamar(c.env, user, kamar_id))) {
       return c.json({
         error: 'Forbidden',
         code: 'KAMAR_NOT_ASSIGNED',
-        message: 'Anda bukan wali kamar ini.'
+        message: 'Anda tidak memiliki akses ke kamar ini.'
       } as ApiError, 403)
     }
     conditions.push('s.kamar_id = ?')
@@ -218,7 +226,7 @@ absensi.get('/rekap', async (c) => {
 })
 
 // PUT /api/absensi/:id — koreksi satu catatan
-absensi.put('/:id', zValidator('json', updateSchema), async (c) => {
+absensi.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async (c) => {
   const id = c.req.param('id')
   const data = c.req.valid('json')
   const user = c.get('user')
@@ -243,6 +251,13 @@ absensi.put('/:id', zValidator('json', updateSchema), async (c) => {
       error: 'Forbidden',
       code: 'KAMAR_NOT_ASSIGNED',
       message: 'Anda tidak memiliki akses untuk mengubah absensi ini.'
+    } as ApiError, 403)
+  }
+  if (user.role === 'kepala_asrama' && !(await canAccessKamar(c.env, user, existing.kamar_id))) {
+    return c.json({
+      error: 'Forbidden',
+      code: 'KAMAR_NOT_IN_ASRAMA',
+      message: 'Absensi ini di luar lingkup asrama Anda.'
     } as ApiError, 403)
   }
 

@@ -17,10 +17,13 @@ export interface Env {
   PESANTREN_NAME?: string
 }
 
+export type Role = 'admin' | 'ustadz' | 'kyai' | 'kepala_asrama'
+
 export interface UserPayload {
   sub: string
   email: string
-  role: 'admin' | 'ustadz'
+  role: Role
+  asrama_jenis?: 'L' | 'P' | null
   kelas_ids: string[]
   kamar_ids: string[]
   iat: number

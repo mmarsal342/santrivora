@@ -1,7 +1,7 @@
 import { sign, verify } from 'hono/jwt'
 import type { JWTPayload } from 'hono/utils/jwt/types'
 import bcrypt from 'bcryptjs'
-import type { UserPayload } from '../types'
+import type { Role, UserPayload } from '../types'
 
 const BCRYPT_COST = 12
 
@@ -19,7 +19,8 @@ export async function generateTokens(
   role: string,
   kelasIds: string[],
   secrets: { access: string; refresh: string },
-  kamarIds: string[] = []
+  kamarIds: string[] = [],
+  asramaJenis: 'L' | 'P' | null = null
 ): Promise<{ access_token: string; refresh_token: string; refresh_jti: string }> {
   const now = Math.floor(Date.now() / 1000)
   const refreshJti = crypto.randomUUID()
@@ -27,7 +28,8 @@ export async function generateTokens(
   const accessPayload: UserPayload = {
     sub: userId,
     email,
-    role: role as 'admin' | 'ustadz',
+    role: role as Role,
+    ...(asramaJenis ? { asrama_jenis: asramaJenis } : {}),
     kelas_ids: kelasIds,
     kamar_ids: kamarIds,
     iat: now,
