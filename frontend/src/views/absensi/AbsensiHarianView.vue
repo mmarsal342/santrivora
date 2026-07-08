@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { kamarService, kegiatanService, santriService, absensiService } from '@/services'
 
@@ -33,6 +34,7 @@ const statusOptions: Array<{ value: AbsensiStatus; label: string; activeClass: s
 ]
 
 const auth = useAuthStore()
+const route = useRoute()
 
 const kamarList = ref<Kamar[]>([])
 const kegiatanList = ref<Kegiatan[]>([])
@@ -72,6 +74,10 @@ async function loadKegiatan() {
   }
   try {
     kegiatanList.value = await kegiatanService.list({ tanggal: tanggal.value })
+    const queryKegiatanId = route.query.kegiatan_id as string
+    if (queryKegiatanId && kegiatanList.value.some((g) => g.id === queryKegiatanId)) {
+      selectedKegiatan.value = queryKegiatanId
+    }
   } catch {
     kegiatanList.value = []
   }
