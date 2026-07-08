@@ -2,6 +2,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { catatanService, kelasService } from '@/services'
+import { useAuthStore } from '@/stores/auth'
 
 interface Catatan {
   id: string
@@ -20,6 +21,7 @@ interface Kelas {
 }
 
 const catatanList = ref<Catatan[]>([])
+const auth = useAuthStore()
 const kelasList = ref<Kelas[]>([])
 const loading = ref(false)
 const loadingMore = ref(false)
@@ -114,6 +116,7 @@ onMounted(() => {
         <p class="text-sm text-gray-500">Daftar pelanggaran dan prestasi santri</p>
       </div>
       <RouterLink
+        v-if="!auth.isReadOnly"
         :to="{ name: 'catatan-new' }"
         class="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
       >
@@ -209,7 +212,7 @@ onMounted(() => {
               <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Judul</th>
               <th class="hidden px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 md:table-cell">Kategori</th>
               <th class="hidden px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 lg:table-cell">Dicatat Oleh</th>
-              <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-500">Aksi</th>
+              <th v-if="!auth.isReadOnly" class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-500">Aksi</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100">
@@ -233,6 +236,7 @@ onMounted(() => {
               <td class="hidden whitespace-nowrap px-4 py-3 text-sm text-gray-600 lg:table-cell">{{ c.dicatat_oleh_nama }}</td>
               <td class="whitespace-nowrap px-4 py-3 text-right">
                 <button
+                  v-if="!auth.isReadOnly"
                   type="button"
                   @click="removeCatatan(c.id)"
                   class="rounded-md p-1.5 text-red-600 transition hover:bg-red-50"

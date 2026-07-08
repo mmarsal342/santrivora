@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { santriService, kamarService } from '@/services'
+import { useAuthStore } from '@/stores/auth'
 
 interface Santri {
   id: string
@@ -19,6 +20,7 @@ interface Kamar {
 }
 
 const router = useRouter()
+const auth = useAuthStore()
 
 const items = ref<Santri[]>([])
 const kamarOptions = ref<Kamar[]>([])
@@ -144,6 +146,7 @@ onMounted(() => {
       </div>
       <div class="flex flex-wrap gap-2">
         <button
+          v-if="!auth.isReadOnly"
           @click="router.push({ name: 'santri-import' })"
           class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
         >
@@ -153,6 +156,7 @@ onMounted(() => {
           Impor CSV
         </button>
         <button
+          v-if="!auth.isReadOnly"
           @click="router.push({ name: 'santri-new' })"
           class="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
         >
@@ -287,6 +291,7 @@ onMounted(() => {
                   </button>
                   <button
                     @click="router.push({ name: 'santri-edit', params: { id: s.id } })"
+                    v-if="!auth.isReadOnly"
                     title="Edit"
                     class="rounded-md p-1.5 text-slate-500 hover:bg-sky-50 hover:text-sky-700"
                   >
@@ -296,6 +301,7 @@ onMounted(() => {
                   </button>
                   <button
                     @click="confirmDelete(s)"
+                    v-if="!auth.isReadOnly"
                     title="Hapus"
                     class="rounded-md p-1.5 text-slate-500 hover:bg-rose-50 hover:text-rose-700"
                   >
@@ -326,6 +332,7 @@ onMounted(() => {
       <h3 class="mt-4 text-sm font-semibold text-slate-800">Belum ada santri</h3>
       <p class="mt-1 text-sm text-slate-500">Mulai dengan menambahkan data santri pertama Anda.</p>
       <button
+        v-if="!auth.isReadOnly"
         @click="router.push({ name: 'santri-new' })"
         class="mt-4 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
       >
