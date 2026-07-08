@@ -5,6 +5,11 @@
 --              serta tabel pesan (Kyai → ustadz) + pesan_dibaca.
 -- ============================================
 
+-- Nonaktifkan FK enforcement selama rebuild users (ada FK incoming dari sessions,
+-- token_blacklist, audit_log). Dire-enable di akhir. Referensi by-name tetap
+-- valid setelah rename karena strukturnya identik.
+PRAGMA foreign_keys = OFF;
+
 -- 1. Rebuild users table: perluas CHECK role + tambah kolom asrama_jenis.
 --    SQLite tidak bisa ALTER constraint, jadi rebuild tabel (FK referensi
 --    dari tabel lain di-resolve by-name, jadi aman).
@@ -57,3 +62,6 @@ CREATE TABLE IF NOT EXISTS pesan_dibaca (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pesan_dibaca_user ON pesan_dibaca(user_id);
+
+-- Re-enable FK enforcement
+PRAGMA foreign_keys = ON;
