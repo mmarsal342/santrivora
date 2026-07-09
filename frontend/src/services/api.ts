@@ -25,17 +25,19 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config
 
-    // Skip refresh for auth endpoints
-    if (error.config?.url?.includes('/auth/')) {
+    // Skip refresh only for the refresh endpoint itself (avoid infinite loop)
+    if (error.config?.url?.includes('/auth/refresh')) {
       return Promise.reject(error)
     }
 
+    const refreshCodes = ['TOKEN_EXPIRED', 'INVALID_TOKEN', 'TOKEN_REVOKED']
     if (error.response?.status === 401 && !originalRequest._retry) {
-      if (error.response.data?.code === 'TOKEN_EXPIRED' || error.response.data?.code === 'INVALID_TOKEN') {
+      if (refreshCodes.includes(error.response.data?.code)) {
         if (isRefreshing) {
           return new Promise((resolve, reject) => {
             failedQueue.push({ resolve, reject })
-          }).then(() => {
+          }).then((token) => {
+            originalRequest.headers.Authorization = `Bearer ${token}`
             return api(originalRequest)
           }).catch((err) => {
             return Promise.reject(err)

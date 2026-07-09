@@ -24,7 +24,7 @@ kelas.get('/', async (c) => {
 
   let results: unknown[] = []
 
-  if (user.role === 'admin') {
+  if (user.role === 'admin' || user.role === 'kyai') {
     const query = `
       SELECT k.*, COUNT(s.id) as jumlah_santri
       FROM kelas k
@@ -88,7 +88,7 @@ kelas.get('/:id', async (c) => {
 })
 
 // POST /api/kelas — admin only
-kelas.post('/', authMiddleware, requireAdmin, zValidator('json', createSchema), async (c) => {
+kelas.post('/', requireAdmin, zValidator('json', createSchema), async (c) => {
   const data = c.req.valid('json')
   const user = c.get('user')
   const id = crypto.randomUUID()
@@ -107,7 +107,7 @@ kelas.post('/', authMiddleware, requireAdmin, zValidator('json', createSchema), 
 })
 
 // PUT /api/kelas/:id — admin only
-kelas.put('/:id', authMiddleware, requireAdmin, zValidator('json', updateSchema), async (c) => {
+kelas.put('/:id', requireAdmin, zValidator('json', updateSchema), async (c) => {
   const id = c.req.param('id')
   const data = c.req.valid('json')
   const user = c.get('user')
@@ -149,7 +149,7 @@ kelas.put('/:id', authMiddleware, requireAdmin, zValidator('json', updateSchema)
 })
 
 // DELETE /api/kelas/:id — admin only (soft delete)
-kelas.delete('/:id', authMiddleware, requireAdmin, async (c) => {
+kelas.delete('/:id', requireAdmin, async (c) => {
   const id = c.req.param('id')
   const user = c.get('user')
 

@@ -23,13 +23,13 @@ describe('santri.ts — list scoping ustadz (kelas OR kamar)', () => {
   })
 })
 
-describe('santri.ts — GET /:id, santri tanpa assignment bisa diakses siapa aja', () => {
-  it('santri tanpa kelas & kamar bisa diliat ustadz manapun', async () => {
+describe('santri.ts — GET /:id, santri tanpa assignment TIDAK bisa diakses ustadz acak (B14 fix)', () => {
+  it('santri tanpa kelas & kamar TIDAK bisa diliat ustadz yang tidak terkait (403)', async () => {
     const santri = await seedSantri({ kelas_id: null, kamar_id: null })
     const ustadz = await seedUser({ role: 'ustadz', kamar_ids: [await seedKamar()] })
 
     const res = await santriRoutes.request(`/${santri}`, { headers: authHeaders(ustadz.accessToken) }, testEnv())
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(403)
   })
 
   it('santri dengan kamar tertentu TIDAK bisa diliat ustadz kamar lain', async () => {

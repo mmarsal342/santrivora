@@ -148,6 +148,10 @@ router.beforeEach(async (to, _from, next) => {
 
   if (auth.isAuthenticated && !auth.user) {
     await auth.fetchMe()
+    // If fetchMe failed (e.g. token expired + refresh failed), redirect to login
+    if (!auth.isAuthenticated || !auth.user) {
+      return next({ name: 'login' })
+    }
   }
 
   const role = auth.user?.role

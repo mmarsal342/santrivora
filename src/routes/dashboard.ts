@@ -12,7 +12,7 @@ const dashboardRead = requireAnyRole('admin', 'kyai', 'kepala_asrama')
 // GET /api/dashboard/summary
 dashboard.get('/summary', dashboardRead, async (c) => {
   const user = c.get('user')
-  const aj = user.role === 'kepala_asrama' ? user.asrama_jenis : null
+  const aj = user.role === 'kepala_asrama' && (user.asrama_jenis === 'L' || user.asrama_jenis === 'P') ? user.asrama_jenis : null
 
   // Filter asrama untuk kepala_asrama. aj aman ('L'|'P') karena dari token kita sendiri.
   const santriFilter = aj
@@ -115,7 +115,7 @@ dashboard.get('/summary', dashboardRead, async (c) => {
 // GET /api/dashboard/trends?period=7d
 dashboard.get('/trends', dashboardRead, async (c) => {
   const user = c.get('user')
-  const aj = user.role === 'kepala_asrama' ? user.asrama_jenis : null
+  const aj = user.role === 'kepala_asrama' && (user.asrama_jenis === 'L' || user.asrama_jenis === 'P') ? user.asrama_jenis : null
   const period = c.req.query('period') || '7d'
   let days = 7
   if (period === '30d') days = 30
@@ -227,7 +227,7 @@ async function computeKamarStats(env: Env, kamarIds: string[], dari: string, sam
 // admin/kyai: semua ustadz. kepala_asrama: cuma ustadz yang pegang kamar di asramanya.
 dashboard.get('/per-wali-kamar', dashboardRead, async (c) => {
   const user = c.get('user')
-  const aj = user.role === 'kepala_asrama' ? user.asrama_jenis : null
+  const aj = user.role === 'kepala_asrama' && (user.asrama_jenis === 'L' || user.asrama_jenis === 'P') ? user.asrama_jenis : null
   const { dari, sampai } = defaultDateRange(c)
 
   const waliList = await c.env.DB.prepare(
@@ -278,7 +278,7 @@ dashboard.get('/per-wali-kamar', dashboardRead, async (c) => {
 // GET /api/dashboard/per-wali-kamar/:userId/santri?dari=&sampai=
 dashboard.get('/per-wali-kamar/:userId/santri', dashboardRead, async (c) => {
   const user = c.get('user')
-  const aj = user.role === 'kepala_asrama' ? user.asrama_jenis : null
+  const aj = user.role === 'kepala_asrama' && (user.asrama_jenis === 'L' || user.asrama_jenis === 'P') ? user.asrama_jenis : null
   const userId = c.req.param('userId')
   const { dari, sampai } = defaultDateRange(c)
 

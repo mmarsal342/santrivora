@@ -85,7 +85,7 @@ describe('catatan.ts — scoping ustadz (kelas OR kamar)', () => {
     expect(res.status).toBe(403)
   })
 
-  it('POST: santri tanpa kelas & tanpa kamar tetap bisa dicatat siapa aja (santri umum)', async () => {
+  it('POST: santri tanpa kelas & tanpa kamar TIDAK bisa dicatat ustadz yang tidak terkait (B14 fix)', async () => {
     const santri = await seedSantri({ kelas_id: null, kamar_id: null })
     const ustadz = await seedUser({ role: 'ustadz', kamar_ids: [await seedKamar()] })
 
@@ -100,7 +100,7 @@ describe('catatan.ts — scoping ustadz (kelas OR kamar)', () => {
       })
     }, testEnv())
 
-    expect(res.status).toBe(201)
+    expect(res.status).toBe(403)
   })
 
   it('admin selalu bisa lihat semua catatan lintas kamar/kelas', async () => {

@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
-import { authMiddleware, requireCanMutate } from '../middleware/auth'
+import { authMiddleware, requireAnyRole } from '../middleware/auth'
 import { resolveKamarScope } from '../lib/scope'
 import type { ApiError, Env, UserPayload } from '../types'
 
@@ -90,7 +90,7 @@ kamar.get('/:id', async (c) => {
 })
 
 // POST /api/kamar — admin atau kepala_asrama (buat kamar di asramanya)
-kamar.post('/', requireCanMutate(), zValidator('json', createSchema), async (c) => {
+kamar.post('/', requireAnyRole('admin', 'kepala_asrama'), zValidator('json', createSchema), async (c) => {
   const data = c.req.valid('json')
   const user = c.get('user')
 
@@ -119,7 +119,7 @@ kamar.post('/', requireCanMutate(), zValidator('json', createSchema), async (c) 
 })
 
 // PUT /api/kamar/:id — admin atau kepala_asrama (asramanya)
-kamar.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async (c) => {
+kamar.put('/:id', requireAnyRole('admin', 'kepala_asrama'), zValidator('json', updateSchema), async (c) => {
   const id = c.req.param('id')
   const data = c.req.valid('json')
   const user = c.get('user')
@@ -172,7 +172,7 @@ kamar.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async (c
 })
 
 // DELETE /api/kamar/:id — soft delete, admin atau kepala_asrama (asramanya)
-kamar.delete('/:id', requireCanMutate(), async (c) => {
+kamar.delete('/:id', requireAnyRole('admin', 'kepala_asrama'), async (c) => {
   const id = c.req.param('id')
   const user = c.get('user')
 

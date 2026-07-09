@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 
 interface Catatan {
   id: string
-  tanggal: string
+  tanggal_kejadian: string
   santri_nama: string
   tipe: 'pelanggaran' | 'prestasi'
   judul: string
@@ -217,7 +217,7 @@ onMounted(() => {
           </thead>
           <tbody class="divide-y divide-gray-100">
             <tr v-for="c in catatanList" :key="c.id" class="transition hover:bg-gray-50">
-              <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-700">{{ formatDate(c.tanggal) }}</td>
+              <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-700">{{ formatDate(c.tanggal_kejadian) }}</td>
               <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">{{ c.santri_nama }}</td>
               <td class="px-4 py-3">
                 <span
