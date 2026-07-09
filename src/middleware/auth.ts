@@ -40,6 +40,18 @@ export const authMiddleware = async (c: Context<{ Bindings: Env; Variables: { us
     } as ApiError, 401)
   }
 
+  // Check per-user cutoff (admin suspend/ubah role/reset password dst.) — token
+  // yang terbit di detik cutoff atau sebelumnya ditolak; token dari detik SETELAHNYA
+  // (hasil re-login) tetap valid. Lihat komentar di invalidateUserAccessTokens.
+  const revokeBefore = await c.env.KV.get(`revoke_before:${payload.sub}`)
+  if (revokeBefore && payload.iat <= parseInt(revokeBefore, 10)) {
+    return c.json({
+      error: 'Unauthorized',
+      code: 'TOKEN_REVOKED',
+      message: 'Sesi telah berakhir. Silakan login kembali.'
+    } as ApiError, 401)
+  }
+
   c.set('user', payload)
   await next()
 }
@@ -69,5 +81,6 @@ export {
   canMutate,
   resolveKamarScope,
   asramaMatches,
-  canAccessKamar
+  canAccessKamar,
+  invalidateUserAccessTokens
 } from '../lib/scope'

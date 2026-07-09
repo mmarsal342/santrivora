@@ -80,6 +80,29 @@ export function requireAnyRole(...roles: Role[]) {
 /** Middleware: khusus admin. */
 export const requireAdmin = requireAnyRole('admin')
 
+/**
+ * Invalidate access token milik user yang sudah terbit (dipakai saat admin
+ * suspend/ubah role/reset password/dst). Beda dari blacklist per-jti: ini
+ * per-user berdasarkan cutoff waktu (dibandingkan ke `iat` token), jadi token
+ * BARU hasil re-login (iat setelah cutoff) tetap valid — tidak mengulang bug
+ * blacklist blanket yang pernah mengunci user yang baru saja login ulang.
+ * TTL KV disamakan dengan umur maksimum access token (15 menit) supaya key
+ * otomatis hilang setelah semua token lama itu kedaluwarsa sendiri.
+ *
+ * Cutoff dan `iat` JWT sama-sama granularitas detik, dan dibandingkan inklusif
+ * (`iat <= cutoff` = revoked) — bukan `<`. Kalau strict `<`, token yang terbit di
+ * detik integer yang SAMA dengan aksi admin ini (kejadian nyata, bukan cuma di
+ * test) tidak akan ketahuan lebih tua dan tetap lolos. Konsekuensinya: re-login
+ * yang kebetulan jatuh di detik integer yang sama persis dengan aksi admin bisa
+ * ikut ditolak sekali (harus retry) — trade-off yang jauh lebih aman daripada
+ * membiarkan token lama lolos.
+ */
+export async function invalidateUserAccessTokens(env: Env, userId: string | undefined): Promise<void> {
+  if (!userId) return
+  const cutoffSec = Math.floor(Date.now() / 1000)
+  await env.KV.put(`revoke_before:${userId}`, String(cutoffSec), { expirationTtl: 900 })
+}
+
 /** Middleware: tolak kyai (read-only). Dipakai di endpoint mutasi data. */
 export function requireCanMutate() {
   return async (c: Context<{ Bindings: Env; Variables: { user: UserPayload } }>, next: Next) => {

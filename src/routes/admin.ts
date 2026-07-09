@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import { hashPassword } from '../services/auth'
-import { authMiddleware, requireRole, requireAnyRole } from '../middleware/auth'
+import { authMiddleware, requireRole, requireAnyRole, invalidateUserAccessTokens } from '../middleware/auth'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const admin = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -277,6 +277,8 @@ admin.post('/users/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zVali
 
   // Revoke sessions so stale kamar_ids in token can't be refreshed
   await c.env.DB.prepare('UPDATE sessions SET is_revoked = 1 WHERE user_id = ?').bind(userId).run()
+  // ... dan token akses yang masih hidup (bukan cuma refresh-nya) langsung ditolak juga
+  await invalidateUserAccessTokens(c.env, userId)
 
   // Audit log — beda action buat approval pertama vs sekadar edit kamar belakangan
   await c.env.DB.prepare(
@@ -345,6 +347,7 @@ admin.post('/users/:id/assign-role', requireRole('admin'), zValidator('json', as
       ).bind(existing.id).run()
       // Revoke demoted user's sessions so their old kepala_asrama token stops working
       await c.env.DB.prepare('UPDATE sessions SET is_revoked = 1 WHERE user_id = ?').bind(existing.id).run()
+      await invalidateUserAccessTokens(c.env, existing.id)
       await c.env.DB.prepare(
         `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
          VALUES (?, ?, 'user.demote_from_kepala', 'users', ?, ?)`
@@ -359,6 +362,7 @@ admin.post('/users/:id/assign-role', requireRole('admin'), zValidator('json', as
 
   // Revoke sessions supaya token baru (dengan role/asrama baru) wajib di-refresh
   await c.env.DB.prepare('UPDATE sessions SET is_revoked = 1 WHERE user_id = ?').bind(userId).run()
+  await invalidateUserAccessTokens(c.env, userId)
 
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, old_value, new_value)
@@ -416,6 +420,7 @@ admin.post('/users/:id/suspend', requireRole('admin'), async (c) => {
   await c.env.DB.prepare(
     'UPDATE sessions SET is_revoked = 1 WHERE user_id = ?'
   ).bind(userId).run()
+  await invalidateUserAccessTokens(c.env, userId)
 
   // Audit log
   await c.env.DB.prepare(
@@ -471,6 +476,7 @@ admin.post('/users/:id/reset-password', requireRole('admin'), zValidator('json',
   await c.env.DB.prepare(
     'UPDATE sessions SET is_revoked = 1 WHERE user_id = ?'
   ).bind(userId).run()
+  await invalidateUserAccessTokens(c.env, userId)
 
   // Audit log
   await c.env.DB.prepare(
