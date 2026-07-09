@@ -48,6 +48,69 @@ const pushSchema = z.object({
   items: z.array(pushItemSchema).min(1).max(100)
 })
 
+// Shared validators — dipakai baik oleh create/update langsung maupun oleh
+// conflict-resolution, supaya jalur resolve tidak bisa menerapkan kelas_id/
+// kamar_id/gender di luar scope atau yang tidak valid (lihat sync_conflicts resolve).
+async function checkSantriScopeAccess(
+  env: Env, user: UserPayload, santriRow: { kelas_id: string | null; kamar_id: string | null }
+): Promise<boolean> {
+  if (user.role === 'admin' || user.role === 'kyai') return true
+  if (user.role === 'kepala_asrama') {
+    return await canAccessKamar(env, user, santriRow.kamar_id)
+  }
+  const viaKelas = !!santriRow.kelas_id && user.kelas_ids.includes(santriRow.kelas_id)
+  const viaKamar = !!santriRow.kamar_id && user.kamar_ids.includes(santriRow.kamar_id)
+  return viaKelas || viaKamar
+}
+
+async function checkSantriTargetScope(
+  env: Env, user: UserPayload, kelasId: string | null | undefined, kamarId: string | null | undefined
+): Promise<string | null> {
+  if (user.role === 'ustadz') {
+    if (kelasId && !user.kelas_ids.includes(kelasId)) return 'KELAS_NOT_ASSIGNED'
+    if (kamarId && !user.kamar_ids.includes(kamarId)) return 'KAMAR_NOT_ASSIGNED'
+  }
+  if (user.role === 'kepala_asrama' && kamarId && !(await canAccessKamar(env, user, kamarId))) return 'KAMAR_NOT_IN_ASRAMA'
+  return null
+}
+
+async function validateSantriRefs(
+  env: Env, kelasId: string | null | undefined, kamarId: string | null | undefined, jenisKelamin: 'L' | 'P'
+): Promise<string | null> {
+  if (kelasId) {
+    const kelas = await env.DB.prepare('SELECT id FROM kelas WHERE id = ? AND is_active = 1').bind(kelasId).first()
+    if (!kelas) return 'KELAS_NOT_FOUND'
+  }
+  if (kamarId) {
+    const kamar = await env.DB.prepare('SELECT id, jenis_kelamin FROM kamar WHERE id = ? AND is_active = 1').bind(kamarId).first<{ jenis_kelamin: string }>()
+    if (!kamar) return 'KAMAR_NOT_FOUND'
+    if (kamar.jenis_kelamin !== jenisKelamin) return 'KAMAR_GENDER_MISMATCH'
+  }
+  return null
+}
+
+async function checkCatatanScopeAccess(env: Env, user: UserPayload, santriId: string): Promise<{ ok: boolean; santri?: { kelas_id: string | null; kamar_id: string | null; status: string } }> {
+  const santri = await env.DB.prepare(
+    'SELECT kelas_id, kamar_id, status FROM santri WHERE id = ?'
+  ).bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null; status: string }>()
+  if (!santri) return { ok: false }
+  if (user.role === 'admin' || user.role === 'kyai') return { ok: true, santri }
+  if (user.role === 'kepala_asrama') return { ok: await canAccessKamar(env, user, santri.kamar_id), santri }
+  const viaKelas = !!santri.kelas_id && user.kelas_ids.includes(santri.kelas_id)
+  const viaKamar = !!santri.kamar_id && user.kamar_ids.includes(santri.kamar_id)
+  return { ok: viaKelas || viaKamar, santri }
+}
+
+async function validateKategoriRef(env: Env, tipe: string | undefined, kategoriId: string | null | undefined): Promise<string | null> {
+  if (tipe === 'pelanggaran' && kategoriId) {
+    const kategori = await env.DB.prepare(
+      'SELECT id FROM kategori_pelanggaran WHERE id = ? AND is_active = 1'
+    ).bind(kategoriId).first()
+    if (!kategori) return 'KATEGORI_NOT_FOUND'
+  }
+  return null
+}
+
 // POST /api/sync — push batch changes from client
 sync.post('/', requireCanMutate(), zValidator('json', pushSchema), async (c) => {
   const { items } = c.req.valid('json')
@@ -206,7 +269,18 @@ sync.post('/conflicts/:id/resolve', requireCanMutate(), async (c) => {
   const conflictId = c.req.param('id')
   const user = c.get('user')
   type ResolveBody = { resolution: 'use_server' | 'use_client' | 'manual_merge'; merged_data?: Record<string, unknown> }
-  const body = await c.req.json<ResolveBody>().catch(() => ({ resolution: 'use_server' } as ResolveBody))
+  const rawBody = await c.req.json<Partial<ResolveBody>>().catch(() => ({} as Partial<ResolveBody>))
+  if (rawBody.resolution !== 'use_server' && rawBody.resolution !== 'use_client' && rawBody.resolution !== 'manual_merge') {
+    // Sebelumnya body tanpa `resolution` valid diam-diam jatuh ke default 'use_server'
+    // (atau, kalau tidak match manapun, tidak menerapkan apapun tapi tetap menandai
+    // conflict "resolved") — sekarang ditolak eksplisit.
+    return c.json({
+      error: 'Bad Request',
+      code: 'INVALID_RESOLUTION',
+      message: 'resolution harus salah satu dari: use_server, use_client, manual_merge.'
+    } as ApiError, 400)
+  }
+  const body = rawBody as ResolveBody
 
   const conflict = await c.env.DB.prepare(
     "SELECT * FROM sync_conflicts WHERE id = ? AND status = 'pending'"
@@ -256,7 +330,8 @@ sync.post('/conflicts/:id/resolve', requireCanMutate(), async (c) => {
   if (resolvedData) {
     // B1 fix: whitelist allowed columns per entity type
     const allowedColumns: Record<string, string[]> = {
-      santri: ['nama_lengkap', 'jenis_kelamin', 'kelas_id', 'kamar_id', 'angkatan', 'tanggal_masuk', 'status', 'foto_url', 'tanggal_lahir', 'love_language']
+      santri: ['nama_lengkap', 'jenis_kelamin', 'kelas_id', 'kamar_id', 'angkatan', 'tanggal_masuk', 'status', 'foto_url', 'tanggal_lahir', 'love_language'],
+      catatan_disiplin: ['kategori_id', 'judul', 'deskripsi', 'tanggal_kejadian', 'tindak_lanjut', 'jenis_prestasi']
     }
     const allowed = allowedColumns[conflict.entity_type]
     if (allowed) {
@@ -264,10 +339,63 @@ sync.post('/conflicts/:id/resolve', requireCanMutate(), async (c) => {
         .filter(([k, v]) => allowed.includes(k) && v !== undefined)
 
       if (updateFields.length > 0 && conflict.entity_type === 'santri') {
+        const current = await c.env.DB.prepare(
+          'SELECT kelas_id, kamar_id, jenis_kelamin FROM santri WHERE id = ?'
+        ).bind(conflict.entity_id).first<{ kelas_id: string | null; kamar_id: string | null; jenis_kelamin: 'L' | 'P' }>()
+        if (!current) {
+          return c.json({ error: 'Not Found', code: 'SANTRI_NOT_FOUND', message: 'Santri tidak ditemukan.' } as ApiError, 404)
+        }
+
+        // Ini titik yang tadinya jadi lubang IDOR/privilege-escalation: resolvedData
+        // ('use_client' ataupun 'manual_merge') diterapkan mentah tanpa validasi
+        // scope/gender/keberadaan kelas-kamar — jadi bisa dipakai bypass otorisasi
+        // yang selalu ditegakkan di jalur create/update biasa. Sekarang divalidasi
+        // dengan aturan yang sama.
+        const merged = Object.fromEntries(updateFields) as Record<string, unknown>
+        const effectiveKelasId = (merged.kelas_id !== undefined ? merged.kelas_id : current.kelas_id) as string | null
+        const effectiveKamarId = (merged.kamar_id !== undefined ? merged.kamar_id : current.kamar_id) as string | null
+        const effectiveJenisKelamin = (merged.jenis_kelamin !== undefined ? merged.jenis_kelamin : current.jenis_kelamin) as 'L' | 'P'
+
+        if (!(await checkSantriScopeAccess(c.env, user, current))) {
+          return c.json({ error: 'Forbidden', code: 'SANTRI_NOT_ACCESSIBLE', message: 'Anda tidak memiliki akses ke santri ini.' } as ApiError, 403)
+        }
+        const targetScopeErr = await checkSantriTargetScope(c.env, user, effectiveKelasId, effectiveKamarId)
+        if (targetScopeErr) {
+          return c.json({ error: 'Forbidden', code: targetScopeErr, message: 'Kelas/kamar hasil resolve di luar scope Anda.' } as ApiError, 403)
+        }
+        const refErr = await validateSantriRefs(c.env, effectiveKelasId, effectiveKamarId, effectiveJenisKelamin)
+        if (refErr) {
+          return c.json({ error: 'Bad Request', code: refErr, message: 'Kelas/kamar hasil resolve tidak valid.' } as ApiError, 400)
+        }
+
         const sets = updateFields.map(([k]) => `${k} = ?`).join(', ')
         const vals = updateFields.map(([, v]) => v)
         await c.env.DB.prepare(
           `UPDATE santri SET ${sets}, version = ?, updated_at = datetime('now') WHERE id = ?`
+        ).bind(...vals, conflict.server_version + 1, conflict.entity_id).run()
+      } else if (updateFields.length > 0 && conflict.entity_type === 'catatan_disiplin') {
+        const current = await c.env.DB.prepare(
+          'SELECT santri_id, tipe FROM catatan_disiplin WHERE id = ? AND is_deleted = 0'
+        ).bind(conflict.entity_id).first<{ santri_id: string; tipe: string }>()
+        if (!current) {
+          return c.json({ error: 'Not Found', code: 'CATATAN_NOT_FOUND', message: 'Catatan tidak ditemukan.' } as ApiError, 404)
+        }
+
+        const scopeCheck = await checkCatatanScopeAccess(c.env, user, current.santri_id)
+        if (!scopeCheck.ok) {
+          return c.json({ error: 'Forbidden', code: 'SANTRI_NOT_ACCESSIBLE', message: 'Anda tidak memiliki akses ke santri ini.' } as ApiError, 403)
+        }
+        const merged = Object.fromEntries(updateFields) as Record<string, unknown>
+        const effectiveKategoriId = merged.kategori_id !== undefined ? (merged.kategori_id as string | null) : undefined
+        const kategoriErr = await validateKategoriRef(c.env, current.tipe, effectiveKategoriId)
+        if (kategoriErr) {
+          return c.json({ error: 'Bad Request', code: kategoriErr, message: 'Kategori pelanggaran tidak valid.' } as ApiError, 400)
+        }
+
+        const sets = updateFields.map(([k]) => `${k} = ?`).join(', ')
+        const vals = updateFields.map(([, v]) => v)
+        await c.env.DB.prepare(
+          `UPDATE catatan_disiplin SET ${sets}, version = ?, updated_at = datetime('now') WHERE id = ?`
         ).bind(...vals, conflict.server_version + 1, conflict.entity_id).run()
       }
     }
@@ -308,18 +436,6 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
 
   const serverId = item.data.id as string | undefined
 
-  // Scope helper: cek apakah user boleh akses santri tertentu
-  async function checkSantriScope(santriRow: { kelas_id: string | null; kamar_id: string | null }): Promise<boolean> {
-    if (user.role === 'admin' || user.role === 'kyai') return true
-    if (user.role === 'kepala_asrama') {
-      return await canAccessKamar(env, user, santriRow.kamar_id)
-    }
-    // ustadz
-    const viaKelas = !!santriRow.kelas_id && user.kelas_ids.includes(santriRow.kelas_id)
-    const viaKamar = !!santriRow.kamar_id && user.kamar_ids.includes(santriRow.kamar_id)
-    return viaKelas || viaKamar
-  }
-
   switch (item.action) {
     case 'create': {
       if (serverId) {
@@ -333,17 +449,14 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
       // Scope check: kelas + kamar
       const kelasId = item.data.kelas_id as string | undefined
       const kamarId = item.data.kamar_id as string | undefined
-      if (user.role === 'ustadz') {
-        if (kelasId && !user.kelas_ids.includes(kelasId)) {
-          return { local_id: item.local_id, status: 'error', error: 'KELAS_NOT_ASSIGNED' }
-        }
-        if (kamarId && !user.kamar_ids.includes(kamarId)) {
-          return { local_id: item.local_id, status: 'error', error: 'KAMAR_NOT_ASSIGNED' }
-        }
-      }
-      if (user.role === 'kepala_asrama' && kamarId && !(await canAccessKamar(env, user, kamarId))) {
-        return { local_id: item.local_id, status: 'error', error: 'KAMAR_NOT_IN_ASRAMA' }
-      }
+      const scopeErr = await checkSantriTargetScope(env, user, kelasId, kamarId)
+      if (scopeErr) return { local_id: item.local_id, status: 'error', error: scopeErr }
+
+      // Existence + gender-match check (sama seperti santri.ts POST /) — sebelumnya
+      // hilang di jalur sync sehingga admin/kyai bisa membuat santri dengan kelas_id/
+      // kamar_id yang tidak ada, atau kamar dengan gender yang tidak cocok.
+      const refErr = await validateSantriRefs(env, kelasId, kamarId, item.data.jenis_kelamin)
+      if (refErr) return { local_id: item.local_id, status: 'error', error: refErr }
 
       const newId = serverId || crypto.randomUUID()
       await env.DB.prepare(
@@ -371,17 +484,30 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
       }
 
       const current = await env.DB.prepare(
-        'SELECT id, version, kelas_id, kamar_id FROM santri WHERE id = ?'
-      ).bind(serverId).first<{ id: string; version: number; kelas_id: string | null; kamar_id: string | null }>()
+        'SELECT id, version, kelas_id, kamar_id, jenis_kelamin FROM santri WHERE id = ?'
+      ).bind(serverId).first<{ id: string; version: number; kelas_id: string | null; kamar_id: string | null; jenis_kelamin: 'L' | 'P' }>()
 
       if (!current) {
         return { local_id: item.local_id, status: 'error', error: 'Record not found on server' }
       }
 
       // Scope check: user harus punya akses ke santri ini
-      if (!(await checkSantriScope(current))) {
+      if (!(await checkSantriScopeAccess(env, user, current))) {
         return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_ACCESSIBLE' }
       }
+
+      // Validate target kelas_id/kamar_id/gender BEFORE conflict detection. Ini harus
+      // terjadi di sini, bukan setelah blok conflict di bawah — kalau tidak, seseorang
+      // bisa mengirim version yang sengaja basi supaya payload-nya (kelas/kamar/gender
+      // di luar scope, atau tidak valid) tersimpan mentah sebagai "conflict" lalu
+      // diterapkan lewat /conflicts/:id/resolve tanpa pernah lolos validasi ini.
+      const newKelasId = item.data.kelas_id !== undefined ? item.data.kelas_id : current.kelas_id
+      const newKamarId = item.data.kamar_id !== undefined ? item.data.kamar_id : current.kamar_id
+      const newJenisKelamin = item.data.jenis_kelamin !== undefined ? item.data.jenis_kelamin : current.jenis_kelamin
+      const targetScopeErr = await checkSantriTargetScope(env, user, newKelasId, newKamarId)
+      if (targetScopeErr) return { local_id: item.local_id, status: 'error', error: targetScopeErr }
+      const refErr = await validateSantriRefs(env, newKelasId, newKamarId, newJenisKelamin)
+      if (refErr) return { local_id: item.local_id, status: 'error', error: refErr }
 
       // Conflict detection
       if (current.version > item.version) {
@@ -406,21 +532,6 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
         }
       }
 
-      // Validate scope of new kelas_id/kamar_id (like santri.ts PUT does)
-      const newKelasId = item.data.kelas_id !== undefined ? item.data.kelas_id : current.kelas_id
-      const newKamarId = item.data.kamar_id !== undefined ? item.data.kamar_id : current.kamar_id
-      if (user.role === 'ustadz') {
-        if (newKelasId && !user.kelas_ids.includes(newKelasId)) {
-          return { local_id: item.local_id, status: 'error', error: 'KELAS_NOT_ASSIGNED' }
-        }
-        if (newKamarId && !user.kamar_ids.includes(newKamarId)) {
-          return { local_id: item.local_id, status: 'error', error: 'KAMAR_NOT_ASSIGNED' }
-        }
-      }
-      if (user.role === 'kepala_asrama' && newKamarId && !(await canAccessKamar(env, user, newKamarId))) {
-        return { local_id: item.local_id, status: 'error', error: 'KAMAR_NOT_IN_ASRAMA' }
-      }
-
       // Apply update — whitelist allowed fields
       const allowedFields = ['nama_lengkap', 'jenis_kelamin', 'kelas_id', 'kamar_id', 'angkatan', 'tanggal_masuk', 'status', 'foto_url', 'tanggal_lahir', 'love_language']
       const updateFields = allowedFields.filter(f => item.data[f] !== undefined)
@@ -434,15 +545,25 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
 
         // B26 fix: check actual rows affected
         if (stmt.meta.changes === 0) {
-          // Concurrent update between SELECT and UPDATE → treat as conflict
+          // Concurrent update between SELECT and UPDATE → treat as conflict, and persist it
+          // (sebelumnya cuma dikembalikan di response HTTP — kalau client tidak sempat
+          // menerimanya, conflict itu hilang selamanya dan tidak pernah bisa diresolve).
           const serverData = await env.DB.prepare('SELECT * FROM santri WHERE id = ?').bind(serverId).first()
+          const serverVersion = (serverData as any)?.version || current.version
+          await env.DB.prepare(
+            `INSERT INTO sync_conflicts (id, user_id, entity_type, entity_id, client_version, server_version, client_data, server_data, conflict_type)
+             VALUES (?, ?, 'santri', ?, ?, ?, ?, ?, 'version_mismatch')`
+          ).bind(
+            crypto.randomUUID(), user.sub, serverId, item.version, serverVersion,
+            JSON.stringify(item.data), JSON.stringify(serverData)
+          ).run()
           return {
             local_id: item.local_id,
             status: 'conflict',
             conflict: {
               type: 'version_mismatch',
               server_data: serverData as Record<string, unknown>,
-              server_version: (serverData as any)?.version || current.version
+              server_version: serverVersion
             }
           }
         }
@@ -465,7 +586,7 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
         return { local_id: item.local_id, status: 'error', error: 'Record not found on server' }
       }
 
-      if (!(await checkSantriScope(santri))) {
+      if (!(await checkSantriScopeAccess(env, user, santri))) {
         return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_ACCESSIBLE' }
       }
 
@@ -489,22 +610,6 @@ async function processCatatanSync(env: Env, item: any, user: UserPayload): Promi
 
   const serverId = item.data.id as string | undefined
 
-  // Scope helper: cek apakah user boleh akses catatan untuk santri tertentu
-  async function checkCatatanScope(santriId: string): Promise<boolean> {
-    if (user.role === 'admin' || user.role === 'kyai') return true
-    const santri = await env.DB.prepare(
-      'SELECT kelas_id, kamar_id FROM santri WHERE id = ?'
-    ).bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null }>()
-    if (!santri) return false
-    if (user.role === 'kepala_asrama') {
-      return await canAccessKamar(env, user, santri.kamar_id)
-    }
-    // ustadz
-    const viaKelas = !!santri.kelas_id && user.kelas_ids.includes(santri.kelas_id)
-    const viaKamar = !!santri.kamar_id && user.kamar_ids.includes(santri.kamar_id)
-    return viaKelas || viaKamar
-  }
-
   switch (item.action) {
     case 'create': {
       const santriId = item.data.santri_id as string | undefined
@@ -513,14 +618,22 @@ async function processCatatanSync(env: Env, item: any, user: UserPayload): Promi
       }
 
       // B25: validate santri exists + scope
-      const santri = await env.DB.prepare(
-        'SELECT id, status FROM santri WHERE id = ?'
-      ).bind(santriId).first<{ id: string; status: string }>()
-      if (!santri) {
+      const scopeCheck = await checkCatatanScopeAccess(env, user, santriId)
+      if (!scopeCheck.santri) {
         return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_FOUND' }
       }
-      if (!(await checkCatatanScope(santriId))) {
+      if (!scopeCheck.ok) {
         return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_ACCESSIBLE' }
+      }
+      // Sama seperti catatan.ts POST / — santri harus aktif, dan kategori (kalau
+      // pelanggaran) harus ada. Sebelumnya jalur sync tidak mengecek keduanya sama
+      // sekali, jadi bisa membuat catatan untuk santri lulus/keluar atau kategori palsu.
+      if (scopeCheck.santri.status !== 'aktif') {
+        return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_ACTIVE' }
+      }
+      const kategoriErr = await validateKategoriRef(env, item.data.tipe, item.data.kategori_id)
+      if (kategoriErr) {
+        return { local_id: item.local_id, status: 'error', error: kategoriErr }
       }
 
       const newId = serverId || crypto.randomUUID()
@@ -557,12 +670,33 @@ async function processCatatanSync(env: Env, item: any, user: UserPayload): Promi
       }
 
       // Scope check
-      if (!(await checkCatatanScope(current.santri_id))) {
+      const scopeCheck = await checkCatatanScopeAccess(env, user, current.santri_id)
+      if (!scopeCheck.ok) {
         return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_ACCESSIBLE' }
+      }
+
+      // Validasi kategori kalau field itu diubah — sebelumnya tidak dicek di jalur sync.
+      const kategoriErr = await validateKategoriRef(
+        env,
+        item.data.tipe ?? undefined,
+        item.data.kategori_id !== undefined ? item.data.kategori_id : undefined
+      )
+      if (kategoriErr) {
+        return { local_id: item.local_id, status: 'error', error: kategoriErr }
       }
 
       if (current.version > item.version) {
         const serverData = await env.DB.prepare('SELECT * FROM catatan_disiplin WHERE id = ?').bind(serverId).first()
+        // B2 fix: persist conflict (sebelumnya cuma dikembalikan di response HTTP dan
+        // hilang selamanya kalau client tidak sempat menerimanya — beda dengan santri
+        // yang sudah benar menyimpan ke sync_conflicts).
+        await env.DB.prepare(
+          `INSERT INTO sync_conflicts (id, user_id, entity_type, entity_id, client_version, server_version, client_data, server_data, conflict_type)
+           VALUES (?, ?, 'catatan_disiplin', ?, ?, ?, ?, ?, 'version_mismatch')`
+        ).bind(
+          crypto.randomUUID(), user.sub, serverId, item.version, current.version,
+          JSON.stringify(item.data), JSON.stringify(serverData)
+        ).run()
         return {
           local_id: item.local_id,
           status: 'conflict',
@@ -588,13 +722,21 @@ async function processCatatanSync(env: Env, item: any, user: UserPayload): Promi
         // B26 fix: check actual rows affected
         if (stmt.meta.changes === 0) {
           const serverData = await env.DB.prepare('SELECT * FROM catatan_disiplin WHERE id = ?').bind(serverId).first()
+          const serverVersion = (serverData as any)?.version || current.version
+          await env.DB.prepare(
+            `INSERT INTO sync_conflicts (id, user_id, entity_type, entity_id, client_version, server_version, client_data, server_data, conflict_type)
+             VALUES (?, ?, 'catatan_disiplin', ?, ?, ?, ?, ?, 'version_mismatch')`
+          ).bind(
+            crypto.randomUUID(), user.sub, serverId, item.version, serverVersion,
+            JSON.stringify(item.data), JSON.stringify(serverData)
+          ).run()
           return {
             local_id: item.local_id,
             status: 'conflict',
             conflict: {
               type: 'version_mismatch',
               server_data: serverData as Record<string, unknown>,
-              server_version: (serverData as any)?.version || current.version
+              server_version: serverVersion
             }
           }
         }
@@ -615,7 +757,7 @@ async function processCatatanSync(env: Env, item: any, user: UserPayload): Promi
         return { local_id: item.local_id, status: 'error', error: 'Record not found' }
       }
 
-      if (!(await checkCatatanScope(current.santri_id))) {
+      if (!(await checkCatatanScopeAccess(env, user, current.santri_id)).ok) {
         return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_ACCESSIBLE' }
       }
 
