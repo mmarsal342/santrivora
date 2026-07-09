@@ -9,6 +9,33 @@ const sync = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
 
 sync.use('*', authMiddleware)
 
+// Validation schemas for sync data payloads
+const santriDataSchema = z.object({
+  id: z.string().optional(),
+  nama_lengkap: z.string().max(200),
+  jenis_kelamin: z.enum(['L', 'P']),
+  kelas_id: z.string().uuid().nullable().optional(),
+  kamar_id: z.string().uuid().nullable().optional(),
+  angkatan: z.string().max(10).nullable().optional(),
+  tanggal_masuk: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  tanggal_lahir: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  status: z.enum(['aktif', 'lulus', 'keluar']).optional(),
+  foto_url: z.string().max(500).nullable().optional(),
+  love_language: z.string().max(200).nullable().optional()
+})
+
+const catatanDataSchema = z.object({
+  id: z.string().optional(),
+  santri_id: z.string().uuid(),
+  tipe: z.enum(['pelanggaran', 'prestasi']),
+  kategori_id: z.string().uuid().nullable().optional(),
+  judul: z.string().max(200),
+  deskripsi: z.string().max(2000).nullable().optional(),
+  tanggal_kejadian: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  tindak_lanjut: z.string().max(1000).nullable().optional(),
+  jenis_prestasi: z.string().max(100).nullable().optional()
+})
+
 const pushItemSchema = z.object({
   entity_type: z.enum(['santri', 'catatan_disiplin']),
   local_id: z.string(),
@@ -271,6 +298,14 @@ async function processSyncItem(
 }
 
 async function processSantriSync(env: Env, item: any, user: UserPayload): Promise<any> {
+  // Validate data payload against schema (update allows partial)
+  const isUpdate = item.action === 'update'
+  const parseResult = isUpdate ? santriDataSchema.partial().safeParse(item.data) : santriDataSchema.safeParse(item.data)
+  if (!parseResult.success) {
+    return { local_id: item.local_id, status: 'error', error: 'INVALID_DATA: ' + parseResult.error.issues[0]?.message }
+  }
+  item.data = parseResult.data
+
   const serverId = item.data.id as string | undefined
 
   // Scope helper: cek apakah user boleh akses santri tertentu
@@ -369,6 +404,21 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
         }
       }
 
+      // Validate scope of new kelas_id/kamar_id (like santri.ts PUT does)
+      const newKelasId = item.data.kelas_id !== undefined ? item.data.kelas_id : current.kelas_id
+      const newKamarId = item.data.kamar_id !== undefined ? item.data.kamar_id : current.kamar_id
+      if (user.role === 'ustadz') {
+        if (newKelasId && !user.kelas_ids.includes(newKelasId)) {
+          return { local_id: item.local_id, status: 'error', error: 'KELAS_NOT_ASSIGNED' }
+        }
+        if (newKamarId && !user.kamar_ids.includes(newKamarId)) {
+          return { local_id: item.local_id, status: 'error', error: 'KAMAR_NOT_ASSIGNED' }
+        }
+      }
+      if (user.role === 'kepala_asrama' && newKamarId && !(await canAccessKamar(env, user, newKamarId))) {
+        return { local_id: item.local_id, status: 'error', error: 'KAMAR_NOT_IN_ASRAMA' }
+      }
+
       // Apply update — whitelist allowed fields
       const allowedFields = ['nama_lengkap', 'jenis_kelamin', 'kelas_id', 'kamar_id', 'angkatan', 'tanggal_masuk', 'status', 'foto_url', 'tanggal_lahir', 'love_language']
       const updateFields = allowedFields.filter(f => item.data[f] !== undefined)
@@ -427,6 +477,14 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
 }
 
 async function processCatatanSync(env: Env, item: any, user: UserPayload): Promise<any> {
+  // Validate data payload
+  const isUpdate = item.action === 'update'
+  const parseResult = isUpdate ? catatanDataSchema.partial().safeParse(item.data) : catatanDataSchema.safeParse(item.data)
+  if (!parseResult.success) {
+    return { local_id: item.local_id, status: 'error', error: 'INVALID_DATA: ' + parseResult.error.issues[0]?.message }
+  }
+  item.data = parseResult.data
+
   const serverId = item.data.id as string | undefined
 
   // Scope helper: cek apakah user boleh akses catatan untuk santri tertentu

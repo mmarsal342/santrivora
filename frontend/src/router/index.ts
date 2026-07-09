@@ -29,7 +29,8 @@ const router = createRouter({
         {
           path: 'absensi',
           name: 'absensi',
-          component: () => import('@/views/absensi/AbsensiHarianView.vue')
+          component: () => import('@/views/absensi/AbsensiHarianView.vue'),
+          meta: { excludeReadOnly: true }
         },
         {
           path: 'santri',
@@ -85,7 +86,8 @@ const router = createRouter({
         {
           path: 'kegiatan',
           name: 'kegiatan',
-          component: () => import('@/views/kegiatan/KegiatanListView.vue')
+          component: () => import('@/views/kegiatan/KegiatanListView.vue'),
+          meta: { excludeReadOnly: true }
         },
         {
           path: 'jadwal-kegiatan',

@@ -26,8 +26,16 @@ const updateSchema = z.object({
   is_active: z.number().int().optional()
 })
 
-function canManage(user: UserPayload, kegiatanRow: { created_by: string }) {
-  return user.role === 'admin' || user.sub === kegiatanRow.created_by
+function canManage(user: UserPayload, kegiatanRow: { created_by: string; kelas_id: string | null; kamar_id: string | null }) {
+  if (user.role === 'admin' || user.role === 'kyai') return true
+  // Creator can manage — but only if they still have scope access to this kegiatan's kelas/kamar
+  if (user.sub === kegiatanRow.created_by) {
+    if (kegiatanRow.kamar_id && user.role === 'ustadz') return user.kamar_ids.includes(kegiatanRow.kamar_id)
+    if (kegiatanRow.kelas_id && user.role === 'ustadz') return user.kelas_ids.includes(kegiatanRow.kelas_id)
+    // No kelas/kamar assignment on the kegiatan → creator can still manage (it's theirs)
+    return true
+  }
+  return false
 }
 
 // Bikin instance kegiatan hari itu dari tiap jadwal_kegiatan aktif yang belum
@@ -165,6 +173,15 @@ kegiatan.post('/', requireCanMutate(), zValidator('json', createSchema), async (
   const data = c.req.valid('json')
   const user = c.get('user')
 
+  // Non-admin wajib specify kelas_id atau kamar_id (no global kegiatan)
+  if (user.role !== 'admin' && !data.kelas_id && !data.kamar_id) {
+    return c.json({
+      error: 'Bad Request',
+      code: 'SCOPE_REQUIRED',
+      message: 'Anda harus memilih kelas atau kamar untuk kegiatan ini.'
+    } as ApiError, 400)
+  }
+
   if (user.role === 'ustadz') {
     if (data.kelas_id && !user.kelas_ids.includes(data.kelas_id)) {
       return c.json({
@@ -214,7 +231,7 @@ kegiatan.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async
   const data = c.req.valid('json')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ?').bind(id).first<{ created_by: string; kamar_id: string | null }>()
+  const existing = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ?').bind(id).first<{ created_by: string; kelas_id: string | null; kamar_id: string | null }>()
   if (!existing) {
     return c.json({
       error: 'Not Found',
@@ -265,7 +282,7 @@ kegiatan.delete('/:id', requireCanMutate(), async (c) => {
   const id = c.req.param('id')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ? AND is_active = 1').bind(id).first<{ created_by: string; kamar_id: string | null }>()
+  const existing = await c.env.DB.prepare('SELECT * FROM kegiatan WHERE id = ? AND is_active = 1').bind(id).first<{ created_by: string; kelas_id: string | null; kamar_id: string | null }>()
   if (!existing) {
     return c.json({
       error: 'Not Found',

@@ -58,7 +58,7 @@ absensi.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async 
       continue
     }
 
-    if (user.role === 'ustadz' && santri.kamar_id && !user.kamar_ids.includes(santri.kamar_id)) {
+    if (user.role === 'ustadz' && (!santri.kamar_id || !user.kamar_ids.includes(santri.kamar_id))) {
       results.push({ santri_id: item.santri_id, status: 'error', error: 'KAMAR_NOT_ASSIGNED' })
       continue
     }
@@ -244,7 +244,7 @@ absensi.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async 
     } as ApiError, 404)
   }
 
-  if (user.role === 'ustadz' && existing.kamar_id && !user.kamar_ids.includes(existing.kamar_id)) {
+  if (user.role === 'ustadz' && (!existing.kamar_id || !user.kamar_ids.includes(existing.kamar_id))) {
     return c.json({
       error: 'Forbidden',
       code: 'KAMAR_NOT_ASSIGNED',

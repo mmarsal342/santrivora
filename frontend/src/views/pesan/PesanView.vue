@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { pesanService } from '@/services'
@@ -43,6 +43,11 @@ const recipients = ref<Array<{ id: string; nama_lengkap: string; asrama: string 
 const sending = ref(false)
 const composeError = ref('')
 const composeSuccess = ref('')
+
+// Detail view
+const selectedPesan = ref<PesanRow | null>(null)
+const loadingDetail = ref(false)
+const composeTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
@@ -119,7 +124,7 @@ async function sendPesan() {
     composeSuccess.value = 'Pesan berhasil dikirim.'
     composeForm.value = { judul: '', isi: '', prioritas: 'biasa', targetMode: 'all', asrama_jenis: 'L', penerima_id: '' }
     if (activeTab.value === 'sent') loadSent()
-    setTimeout(() => { showCompose.value = false; composeSuccess.value = '' }, 1500)
+    composeTimer.value = setTimeout(() => { showCompose.value = false; composeSuccess.value = '' }, 1500)
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     composeError.value = err?.response?.data?.message || 'Gagal mengirim pesan.'
@@ -135,6 +140,32 @@ onMounted(() => {
   }
   loadData()
 })
+
+onUnmounted(() => {
+  if (composeTimer.value) clearTimeout(composeTimer.value)
+})
+
+async function openPesan(p: PesanRow) {
+  if (activeTab.value === 'sent') {
+    selectedPesan.value = p
+    return
+  }
+  loadingDetail.value = true
+  selectedPesan.value = p
+  try {
+    await pesanService.get(p.id)
+    // Mark as read locally
+    p.sudah_dibaca = 1
+  } catch {
+    // ignore — detail still visible
+  } finally {
+    loadingDetail.value = false
+  }
+}
+
+function closePesan() {
+  selectedPesan.value = null
+}
 </script>
 
 <template>
@@ -220,6 +251,27 @@ onMounted(() => {
       </div>
     </div>
 
+    <!-- Detail modal -->
+    <div v-if="selectedPesan" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" @click.self="closePesan">
+      <div class="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <span v-if="selectedPesan.prioritas === 'penting'" class="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700">Penting</span>
+            <h2 class="mt-1 text-lg font-semibold text-slate-900">{{ selectedPesan.judul }}</h2>
+          </div>
+          <button @click="closePesan" class="rounded-lg p-1 text-slate-400 hover:bg-slate-100">
+            <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+        <div class="mt-2 text-xs text-slate-400">
+          <span v-if="activeTab === 'sent'">Ke: {{ targetLabel(selectedPesan) }}</span>
+          <span v-else>Dari: {{ selectedPesan.pengirim_nama || '—' }}</span>
+          <span class="ml-3">{{ formatDate(selectedPesan.created_at) }}</span>
+        </div>
+        <p class="mt-4 whitespace-pre-wrap text-sm text-slate-700">{{ selectedPesan.isi }}</p>
+      </div>
+    </div>
+
     <!-- List -->
     <div v-if="loading" class="space-y-3">
       <div v-for="i in 4" :key="i" class="h-20 animate-pulse rounded-xl bg-slate-100"></div>
@@ -236,8 +288,9 @@ onMounted(() => {
       <div
         v-for="p in (activeTab === 'inbox' ? inbox : sent)"
         :key="p.id"
-        class="rounded-xl border bg-white p-4 shadow-sm transition hover:shadow-md"
+        class="cursor-pointer rounded-xl border bg-white p-4 shadow-sm transition hover:shadow-md"
         :class="activeTab === 'inbox' && !p.sudah_dibaca ? 'border-purple-200' : 'border-slate-200'"
+        @click="openPesan(p)"
       >
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">

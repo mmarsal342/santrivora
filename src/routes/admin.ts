@@ -33,8 +33,8 @@ const resetPasswordSchema = z.object({
 admin.get('/users', requireAnyRole('admin', 'kepala_asrama'), async (c) => {
   const user = c.get('user')
   const status = c.req.query('status')
-  const page = parseInt(c.req.query('page') || '1')
-  const limit = parseInt(c.req.query('limit') || '20')
+  const page = Math.max(parseInt(c.req.query('page') || '1') || 1, 1)
+  const limit = Math.min(Math.max(parseInt(c.req.query('limit') || '20') || 20, 1), 200)
   const offset = (page - 1) * limit
 
   let query = 'SELECT id, email, nama_lengkap, role, asrama_jenis, status, last_login, created_at FROM users'
@@ -121,10 +121,11 @@ admin.get('/users', requireAnyRole('admin', 'kepala_asrama'), async (c) => {
 // GET /api/admin/users/:id — detail user
 admin.get('/users/:id', requireAnyRole('admin', 'kepala_asrama'), async (c) => {
   const userId = c.req.param('id')
+  const adminUser = c.get('user')
 
   const user = await c.env.DB.prepare(
     'SELECT id, email, nama_lengkap, role, status, last_login, created_at, updated_at FROM users WHERE id = ?'
-  ).bind(userId).first()
+  ).bind(userId).first<{ role: string }>()
 
   if (!user) {
     return c.json({
@@ -132,6 +133,28 @@ admin.get('/users/:id', requireAnyRole('admin', 'kepala_asrama'), async (c) => {
       code: 'USER_NOT_FOUND',
       message: 'User tidak ditemukan.'
     } as ApiError, 404)
+  }
+
+  // kepala_asrama: hanya bisa lihat ustadz yang pegang kamar di asramanya
+  if (adminUser.role === 'kepala_asrama') {
+    if (user.role !== 'ustadz') {
+      return c.json({
+        error: 'Forbidden',
+        code: 'INSUFFICIENT_PERMISSIONS',
+        message: 'Anda hanya dapat melihat akun ustadz.'
+      } as ApiError, 403)
+    }
+    const inAsrama = await c.env.DB.prepare(
+      `SELECT 1 FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id
+       WHERE uk.user_id = ? AND k.jenis_kelamin = ? LIMIT 1`
+    ).bind(userId, adminUser.asrama_jenis || '').first()
+    if (!inAsrama) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'USER_NOT_IN_ASRAMA',
+        message: 'Ustadz ini tidak berada di asrama Anda.'
+      } as ApiError, 403)
+    }
   }
 
   // Get assigned kelas + kamar
@@ -181,6 +204,21 @@ admin.post('/users/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zVali
       code: 'INSUFFICIENT_PERMISSIONS',
       message: 'Anda hanya dapat mengelola akun ustadz.'
     } as ApiError, 403)
+  }
+
+  // kepala_asrama: cek ustadz yang sudah punya kamar harus dari asramanya juga (anti "curi" ustadz)
+  if (adminUser.role === 'kepala_asrama' && user.status === 'approved') {
+    const existingKamar = await c.env.DB.prepare(
+      `SELECT k.jenis_kelamin FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id
+       WHERE uk.user_id = ? LIMIT 1`
+    ).bind(userId).first<{ jenis_kelamin: string }>()
+    if (existingKamar && existingKamar.jenis_kelamin !== adminUser.asrama_jenis) {
+      return c.json({
+        error: 'Forbidden',
+        code: 'USER_NOT_IN_ASRAMA',
+        message: 'Ustadz ini berada di asrama lain.'
+      } as ApiError, 403)
+    }
   }
 
   const isFirstApproval = user.status === 'pending'
@@ -236,6 +274,10 @@ admin.post('/users/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zVali
     const batch = kamar_ids.map((kamarId) => stmt.bind(userId, kamarId))
     await c.env.DB.batch(batch)
   }
+
+  // Revoke sessions + blacklist access tokens so kamar_ids in token must be re-fetched
+  await c.env.DB.prepare('UPDATE sessions SET is_revoked = 1 WHERE user_id = ?').bind(userId).run()
+  await c.env.KV.put(`blacklist:user:${userId}`, 'true', { expirationTtl: 900 })
 
   // Audit log — beda action buat approval pertama vs sekadar edit kamar belakangan
   await c.env.DB.prepare(
@@ -317,6 +359,9 @@ admin.post('/users/:id/assign-role', requireRole('admin'), zValidator('json', as
   // Revoke sessions supaya token baru (dengan role/asrama baru) wajib di-refresh
   await c.env.DB.prepare('UPDATE sessions SET is_revoked = 1 WHERE user_id = ?').bind(userId).run()
 
+  // Blacklist user's access tokens
+  await c.env.KV.put(`blacklist:user:${userId}`, 'true', { expirationTtl: 900 })
+
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, old_value, new_value)
      VALUES (?, ?, 'user.assign_role', 'users', ?, ?, ?)`
@@ -374,6 +419,9 @@ admin.post('/users/:id/suspend', requireRole('admin'), async (c) => {
     'UPDATE sessions SET is_revoked = 1 WHERE user_id = ?'
   ).bind(userId).run()
 
+  // Blacklist user's access tokens for their remaining lifetime (max 15 min)
+  await c.env.KV.put(`blacklist:user:${userId}`, 'true', { expirationTtl: 900 })
+
   // Audit log
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id)
@@ -429,6 +477,9 @@ admin.post('/users/:id/reset-password', requireRole('admin'), zValidator('json',
     'UPDATE sessions SET is_revoked = 1 WHERE user_id = ?'
   ).bind(userId).run()
 
+  // Blacklist user's access tokens
+  await c.env.KV.put(`blacklist:user:${userId}`, 'true', { expirationTtl: 900 })
+
   // Audit log
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id)
@@ -442,8 +493,8 @@ admin.post('/users/:id/reset-password', requireRole('admin'), zValidator('json',
 
 // GET /api/admin/audit-log — view audit logs
 admin.get('/audit-log', requireRole('admin'), async (c) => {
-  const page = parseInt(c.req.query('page') || '1')
-  const limit = parseInt(c.req.query('limit') || '50')
+  const page = Math.max(parseInt(c.req.query('page') || '1') || 1, 1)
+  const limit = Math.min(Math.max(parseInt(c.req.query('limit') || '50') || 50, 1), 200)
   const offset = (page - 1) * limit
   const action = c.req.query('action')
   const userId = c.req.query('user_id')

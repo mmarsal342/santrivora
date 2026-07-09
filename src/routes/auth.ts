@@ -111,6 +111,21 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
   // Verify password
   const isValid = await verifyPassword(password, user.password_hash)
   if (!isValid) {
+    // Increment failed attempts, auto-lock after 5
+    const newFailCount = (user.failed_login_attempts || 0) + 1
+    if (newFailCount >= 5) {
+      await c.env.DB.prepare(
+        "UPDATE users SET failed_login_attempts = ?, status = 'suspended', updated_at = datetime('now') WHERE id = ?"
+      ).bind(newFailCount, user.id).run()
+      await c.env.DB.prepare(
+        `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
+         VALUES (?, ?, 'user.auto_lock', 'users', ?, ?)`
+      ).bind(crypto.randomUUID(), user.id, user.id, JSON.stringify({ reason: 'too_many_failed_attempts', count: newFailCount })).run()
+    } else {
+      await c.env.DB.prepare(
+        'UPDATE users SET failed_login_attempts = ? WHERE id = ?'
+      ).bind(newFailCount, user.id).run()
+    }
     return c.json(genericError, 401)
   }
 
@@ -385,10 +400,13 @@ auth.post('/change-password', authMiddleware, zValidator('json', changePasswordS
   const { current_password, new_password } = c.req.valid('json')
   const userPayload = c.get('user')
 
-  // Get current password hash
+  // Get fresh user data from DB (not stale JWT) — prevents privilege retention
   const user = await c.env.DB.prepare(
-    'SELECT password_hash FROM users WHERE id = ?'
-  ).bind(userPayload.sub).first<{ password_hash: string }>()
+    'SELECT id, email, password_hash, nama_lengkap, role, asrama_jenis, status FROM users WHERE id = ?'
+  ).bind(userPayload.sub).first<{
+    id: string; email: string; password_hash: string; nama_lengkap: string
+    role: string; asrama_jenis: 'L' | 'P' | null; status: string
+  }>()
 
   if (!user) {
     return c.json({
@@ -396,6 +414,14 @@ auth.post('/change-password', authMiddleware, zValidator('json', changePasswordS
       code: 'USER_NOT_FOUND',
       message: 'User tidak ditemukan.'
     } as ApiError, 404)
+  }
+
+  if (user.status !== 'approved') {
+    return c.json({
+      error: 'Forbidden',
+      code: 'ACCOUNT_NOT_ACTIVE',
+      message: 'Akun Anda tidak aktif.'
+    } as ApiError, 403)
   }
 
   // Verify current password
@@ -444,15 +470,26 @@ auth.post('/change-password', authMiddleware, zValidator('json', changePasswordS
     'UPDATE sessions SET is_revoked = 1 WHERE user_id = ?'
   ).bind(userPayload.sub).run()
 
-  // Generate new tokens + a fresh session for this device
+  // Generate new tokens + a fresh session for this device — use FRESH data from DB
+  let kelasIds: string[] = []
+  let kamarIds: string[] = []
+  if (user.role === 'ustadz') {
+    const [kelasAssignments, kamarAssignments] = await Promise.all([
+      c.env.DB.prepare('SELECT kelas_id FROM ustadz_kelas WHERE user_id = ?').bind(user.id).all<{ kelas_id: string }>(),
+      c.env.DB.prepare('SELECT kamar_id FROM ustadz_kamar WHERE user_id = ?').bind(user.id).all<{ kamar_id: string }>()
+    ])
+    kelasIds = kelasAssignments.results?.map((r) => r.kelas_id) || []
+    kamarIds = kamarAssignments.results?.map((r) => r.kamar_id) || []
+  }
+
   const tokens = await generateTokens(
-    userPayload.sub,
-    userPayload.email,
-    userPayload.role,
-    userPayload.kelas_ids,
+    user.id,
+    user.email,
+    user.role,
+    kelasIds,
     { access: c.env.JWT_ACCESS_SECRET, refresh: c.env.JWT_REFRESH_SECRET },
-    userPayload.kamar_ids,
-    userPayload.asrama_jenis ?? null
+    kamarIds,
+    user.asrama_jenis
   )
 
   await c.env.DB.prepare(

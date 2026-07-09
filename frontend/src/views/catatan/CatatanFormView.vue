@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { catatanService, santriService, kategoriService } from '@/services'
 
@@ -73,6 +73,15 @@ function selectSantri(s: Santri) {
   santriSearch.value = ''
   santriDropdownOpen.value = false
 }
+
+const santriDropdownRef = ref<HTMLElement | null>(null)
+function handleOutsideClick(e: MouseEvent) {
+  if (santriDropdownOpen.value && santriDropdownRef.value && !santriDropdownRef.value.contains(e.target as Node)) {
+    santriDropdownOpen.value = false
+  }
+}
+onMounted(() => document.addEventListener('click', handleOutsideClick))
+onUnmounted(() => document.removeEventListener('click', handleOutsideClick))
 
 async function submit() {
   error.value = ''
@@ -148,7 +157,7 @@ onMounted(() => {
       <form v-else class="space-y-5" @submit.prevent="submit">
         <div>
           <label class="mb-1 block text-sm font-medium text-gray-700">Santri <span class="text-red-500">*</span></label>
-          <div class="relative">
+          <div ref="santriDropdownRef" class="relative">
             <button
               type="button"
               @click="santriDropdownOpen = !santriDropdownOpen"

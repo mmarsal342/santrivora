@@ -53,7 +53,8 @@ api.interceptors.response.use(
             throw new Error('No refresh token')
           }
 
-          const response = await axios.post('/api/auth/refresh', {
+          const baseURL = import.meta.env.VITE_API_URL || '/api'
+          const response = await axios.post(`${baseURL}/auth/refresh`, {
             refresh_token: refreshToken
           })
 

@@ -91,10 +91,13 @@ function logout() {
           <span
             :class="[
               'mt-1 inline-flex rounded-full px-2 py-0.5 text-xs font-medium',
-              auth.user?.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
+              auth.isAdmin ? 'bg-purple-100 text-purple-800'
+                : auth.isKyai ? 'bg-amber-100 text-amber-800'
+                : auth.isKepalaAsrama ? 'bg-indigo-100 text-indigo-800'
+                : 'bg-blue-100 text-blue-800'
             ]"
           >
-            {{ auth.user?.role === 'admin' ? 'Administrator' : 'Ustadz' }}
+            {{ auth.isAdmin ? 'Administrator' : auth.isKyai ? 'Kyai' : auth.isKepalaAsrama ? 'Kepala Asrama' : 'Ustadz' }}
           </span>
         </div>
       </div>

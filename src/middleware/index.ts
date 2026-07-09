@@ -81,24 +81,56 @@ export const rateLimitMiddleware = () => {
 
       const windowStart = Math.floor(Date.now() / 1000 / config.window) * config.window
       const key = `ratelimit:${path}:${clientIP}:${windowStart}`
-      const currentCount = parseInt((await c.env.KV.get(key)) || '0')
 
-      if (currentCount >= config.max) {
-        const retryAfter = config.window - (Math.floor(Date.now() / 1000) - windowStart)
-        c.header('Retry-After', String(Math.ceil(retryAfter)))
-        return c.json({
-          error: 'Too Many Requests',
-          code: 'RATE_LIMITED',
-          message: 'Terlalu banyak permintaan. Coba lagi nanti.',
-          retryAfter: Math.ceil(retryAfter)
-        } as ApiError, 429)
+      // For sensitive endpoints, use D1 atomic UPSERT (race-safe)
+      // For general endpoints, use KV (eventually consistent but acceptable)
+      const useStrict = path === '/api/auth/login' || path === '/api/auth/register' || path === '/api/auth/refresh'
+
+      if (useStrict) {
+        const expiresAt = new Date((windowStart + config.window) * 1000).toISOString()
+        const result = await c.env.DB.prepare(
+          `INSERT INTO rate_limit (key, count, window_start, expires_at)
+           VALUES (?, 1, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET count = count + 1
+           RETURNING count`
+        ).bind(key, windowStart, expiresAt).first<{ count: number }>()
+
+        const currentCount = result?.count || 1
+
+        if (currentCount > config.max) {
+          const retryAfter = config.window - (Math.floor(Date.now() / 1000) - windowStart)
+          c.header('Retry-After', String(Math.ceil(retryAfter)))
+          return c.json({
+            error: 'Too Many Requests',
+            code: 'RATE_LIMITED',
+            message: 'Terlalu banyak permintaan. Coba lagi nanti.',
+            retryAfter: Math.ceil(retryAfter)
+          } as ApiError, 429)
+        }
+
+        c.header('X-RateLimit-Limit', String(config.max))
+        c.header('X-RateLimit-Remaining', String(Math.max(config.max - currentCount, 0)))
+        c.header('X-RateLimit-Reset', String(windowStart + config.window))
+      } else {
+        const currentCount = parseInt((await c.env.KV.get(key)) || '0')
+
+        if (currentCount >= config.max) {
+          const retryAfter = config.window - (Math.floor(Date.now() / 1000) - windowStart)
+          c.header('Retry-After', String(Math.ceil(retryAfter)))
+          return c.json({
+            error: 'Too Many Requests',
+            code: 'RATE_LIMITED',
+            message: 'Terlalu banyak permintaan. Coba lagi nanti.',
+            retryAfter: Math.ceil(retryAfter)
+          } as ApiError, 429)
+        }
+
+        await c.env.KV.put(key, String(currentCount + 1), { expirationTtl: config.window })
+
+        c.header('X-RateLimit-Limit', String(config.max))
+        c.header('X-RateLimit-Remaining', String(config.max - currentCount - 1))
+        c.header('X-RateLimit-Reset', String(windowStart + config.window))
       }
-
-      await c.env.KV.put(key, String(currentCount + 1), { expirationTtl: config.window })
-
-      c.header('X-RateLimit-Limit', String(config.max))
-      c.header('X-RateLimit-Remaining', String(config.max - currentCount - 1))
-      c.header('X-RateLimit-Reset', String(windowStart + config.window))
 
       await next()
     } catch (err) {

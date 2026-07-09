@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { santriService, kelasService, kamarService } from '@/services'
 
@@ -39,6 +39,13 @@ const form = reactive({
 })
 
 const kamarOptionsForGender = computed(() => kamarOptions.value.filter((k) => k.jenis_kelamin === form.jenis_kelamin))
+
+// Reset kamar_id if it's no longer valid for the selected gender
+watch(() => form.jenis_kelamin, () => {
+  if (form.kamar_id && !kamarOptionsForGender.value.some((k) => k.id === form.kamar_id)) {
+    form.kamar_id = ''
+  }
+})
 
 const errors = reactive<Record<string, string>>({
   nama_lengkap: '',
@@ -105,7 +112,7 @@ async function loadSantri() {
     form.nama_lengkap = s.nama_lengkap ?? ''
     form.jenis_kelamin = (s.jenis_kelamin as 'L' | 'P') ?? 'L'
     form.kelas_id = s.kelas?.id ?? s.kelas_id ?? ''
-    form.kamar_id = s.kamar_id ?? ''
+    form.kamar_id = s.kamar?.id ?? s.kamar_id ?? ''
     form.angkatan = s.angkatan != null ? String(s.angkatan) : ''
     form.tanggal_masuk = s.tanggal_masuk ? s.tanggal_masuk.slice(0, 10) : ''
     form.tanggal_lahir = s.tanggal_lahir ? s.tanggal_lahir.slice(0, 10) : ''

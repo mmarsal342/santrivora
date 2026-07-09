@@ -83,11 +83,14 @@ async function loadKegiatan() {
   }
 }
 
+let rosterGen = 0
+
 async function loadRoster() {
   if (!selectedKamar.value) {
     santriRows.value = []
     return
   }
+  const myGen = ++rosterGen
   loadingRoster.value = true
   error.value = ''
   successMessage.value = ''
@@ -101,6 +104,7 @@ async function loadRoster() {
         limit: 200
       })
     ])
+    if (myGen !== rosterGen) return // stale response, ignore
     const santriData = (res.data ?? []) as Array<{ id: string; nama_lengkap: string }>
     const existingList = (existingRes.data ?? []) as Array<{ santri_id: string; status: AbsensiStatus; keterangan?: string }>
     const existingMap = new Map(existingList.map((a) => [a.santri_id, a]))

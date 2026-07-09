@@ -119,8 +119,15 @@ function openReset(u: User) {
 
 async function submitReset() {
   if (!resetTarget.value) return
-  if (resetForm.new_password.length < 6) {
-    error.value = 'Password minimal 6 karakter'
+  const pw = resetForm.new_password
+  const pwErrors: string[] = []
+  if (pw.length < 8) pwErrors.push('Minimal 8 karakter')
+  if (!/[A-Z]/.test(pw)) pwErrors.push('Butuh huruf kapital')
+  if (!/[a-z]/.test(pw)) pwErrors.push('Butuh huruf kecil')
+  if (!/\d/.test(pw)) pwErrors.push('Butuh angka')
+  if (!/[^A-Za-z0-9]/.test(pw)) pwErrors.push('Butuh karakter spesial')
+  if (pwErrors.length > 0) {
+    error.value = pwErrors[0]
     return
   }
   resetSubmitting.value = true
@@ -128,7 +135,8 @@ async function submitReset() {
     await adminService.resetPassword(resetTarget.value.id, resetForm.new_password)
     resetTarget.value = null
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal reset password'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal reset password'
   } finally {
     resetSubmitting.value = false
   }
