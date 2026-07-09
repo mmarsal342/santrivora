@@ -33,7 +33,7 @@ const updateSchema = z.object({
 // GET /api/catatan — scoped by role
 catatan.get('/', async (c) => {
   const user = c.get('user')
-  const { santri_id, tipe, kelas_id, cursor, limit } = c.req.query()
+  const { santri_id, tipe, kelas_id, tanggal_dari, tanggal_sampai, cursor, limit } = c.req.query()
 
   const conditions: string[] = ['cd.is_deleted = 0']
   const params: unknown[] = []
@@ -79,8 +79,16 @@ catatan.get('/', async (c) => {
     conditions.push('cd.id > ?')
     params.push(cursor)
   }
+  if (tanggal_dari) {
+    conditions.push('date(cd.tanggal_kejadian) >= date(?)')
+    params.push(tanggal_dari)
+  }
+  if (tanggal_sampai) {
+    conditions.push('date(cd.tanggal_kejadian) <= date(?)')
+    params.push(tanggal_sampai)
+  }
 
-  const pageLimit = Math.min(parseInt(limit || '20'), 100)
+  const pageLimit = Math.min(Math.max(parseInt(limit || '20') || 20, 1), 100)
   const where = `WHERE ${conditions.join(' AND ')}`
 
   const query = `
@@ -138,8 +146,7 @@ catatan.get('/:id', async (c) => {
   if (user.role === 'ustadz') {
     const viaKelas = !!result.kelas_id && user.kelas_ids.includes(result.kelas_id)
     const viaKamar = !!result.kamar_id && user.kamar_ids.includes(result.kamar_id)
-    const santriHasAnyAssignment = !!result.kelas_id || !!result.kamar_id
-    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+    if (!viaKelas && !viaKamar) {
       return c.json({
         error: 'Forbidden',
         code: 'SANTRI_NOT_ACCESSIBLE',
@@ -190,8 +197,7 @@ catatan.post('/', requireCanMutate(), zValidator('json', createSchema), async (c
   if (user.role === 'ustadz') {
     const viaKelas = !!santri.kelas_id && user.kelas_ids.includes(santri.kelas_id)
     const viaKamar = !!santri.kamar_id && user.kamar_ids.includes(santri.kamar_id)
-    const santriHasAnyAssignment = !!santri.kelas_id || !!santri.kamar_id
-    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+    if (!viaKelas && !viaKamar) {
       return c.json({
         error: 'Forbidden',
         code: 'SANTRI_NOT_IN_ASSIGNED_SCOPE',
@@ -273,8 +279,7 @@ catatan.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async 
   if (user.role === 'ustadz') {
     const viaKelas = !!existing.kelas_id && user.kelas_ids.includes(existing.kelas_id)
     const viaKamar = !!existing.kamar_id && user.kamar_ids.includes(existing.kamar_id)
-    const santriHasAnyAssignment = !!existing.kelas_id || !!existing.kamar_id
-    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+    if (!viaKelas && !viaKamar) {
       return c.json({
         error: 'Forbidden',
         code: 'SANTRI_NOT_ACCESSIBLE',
@@ -345,8 +350,7 @@ catatan.delete('/:id', requireCanMutate(), async (c) => {
   if (user.role === 'ustadz') {
     const viaKelas = !!existing.kelas_id && user.kelas_ids.includes(existing.kelas_id)
     const viaKamar = !!existing.kamar_id && user.kamar_ids.includes(existing.kamar_id)
-    const santriHasAnyAssignment = !!existing.kelas_id || !!existing.kamar_id
-    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+    if (!viaKelas && !viaKamar) {
       return c.json({
         error: 'Forbidden',
         code: 'SANTRI_NOT_ACCESSIBLE',

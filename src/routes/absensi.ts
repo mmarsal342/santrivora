@@ -67,24 +67,22 @@ absensi.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async 
       continue
     }
 
-    const existing = await c.env.DB.prepare(
-      'SELECT id FROM absensi WHERE santri_id = ? AND tanggal = ? AND kegiatan_id IS ?'
+    // UPSERT — race-safe via ON CONFLICT (replaces SELECT-then-INSERT)
+    const newId = crypto.randomUUID()
+    await c.env.DB.prepare(
+      `INSERT INTO absensi (id, santri_id, tanggal, kegiatan_id, status, keterangan, dicatat_oleh)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(santri_id, tanggal, COALESCE(kegiatan_id, '')) DO UPDATE SET
+         status = excluded.status, keterangan = excluded.keterangan, dicatat_oleh = excluded.dicatat_oleh,
+         version = version + 1, updated_at = datetime('now')`
+    ).bind(newId, item.santri_id, tanggal, kegiatan_id || null, item.status, item.keterangan || null, user.sub).run()
+
+    const row = await c.env.DB.prepare(
+      `SELECT id FROM absensi WHERE santri_id = ? AND tanggal = ? AND COALESCE(kegiatan_id, '') = COALESCE(?, '')`
     ).bind(item.santri_id, tanggal, kegiatan_id || null).first<{ id: string }>()
 
-    if (existing) {
-      await c.env.DB.prepare(
-        `UPDATE absensi SET status = ?, keterangan = ?, dicatat_oleh = ?, version = version + 1, updated_at = datetime('now')
-         WHERE id = ?`
-      ).bind(item.status, item.keterangan || null, user.sub, existing.id).run()
-      results.push({ santri_id: item.santri_id, status: 'updated', id: existing.id })
-    } else {
-      const id = crypto.randomUUID()
-      await c.env.DB.prepare(
-        `INSERT INTO absensi (id, santri_id, tanggal, kegiatan_id, status, keterangan, dicatat_oleh)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(id, item.santri_id, tanggal, kegiatan_id || null, item.status, item.keterangan || null, user.sub).run()
-      results.push({ santri_id: item.santri_id, status: 'created', id })
-    }
+    const wasCreated = row?.id === newId
+    results.push({ santri_id: item.santri_id, status: wasCreated ? 'created' : 'updated', id: row?.id || newId })
   }
 
   const success = results.filter((r) => r.status === 'created' || r.status === 'updated').length
@@ -153,7 +151,7 @@ absensi.get('/', async (c) => {
     params.push(cursor)
   }
 
-  const pageLimit = Math.min(parseInt(limit || '50'), 200)
+  const pageLimit = Math.min(Math.max(parseInt(limit || '50') || 50, 1), 200)
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
   const query = `

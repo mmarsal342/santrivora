@@ -105,23 +105,22 @@ catatanHaid.post('/', requireCanMutate(), zValidator('json', upsertSchema), asyn
     return c.json(forbidden(access.reason), status)
   }
 
-  const existing = await c.env.DB.prepare(
+  // UPSERT — race-safe via ON CONFLICT (replaces SELECT-then-INSERT)
+  const newId = crypto.randomUUID()
+  await c.env.DB.prepare(
+    `INSERT INTO catatan_haid (id, santri_id, tanggal, status, catatan, dicatat_oleh)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(santri_id, tanggal) DO UPDATE SET
+       status = excluded.status, catatan = excluded.catatan, dicatat_oleh = excluded.dicatat_oleh,
+       updated_at = datetime('now')`
+  ).bind(newId, data.santri_id, data.tanggal, data.status, data.catatan || null, user.sub).run()
+
+  const row = await c.env.DB.prepare(
     'SELECT id FROM catatan_haid WHERE santri_id = ? AND tanggal = ?'
   ).bind(data.santri_id, data.tanggal).first<{ id: string }>()
 
-  let id: string
-  if (existing) {
-    id = existing.id
-    await c.env.DB.prepare(
-      `UPDATE catatan_haid SET status = ?, catatan = ?, dicatat_oleh = ?, updated_at = datetime('now') WHERE id = ?`
-    ).bind(data.status, data.catatan || null, user.sub, id).run()
-  } else {
-    id = crypto.randomUUID()
-    await c.env.DB.prepare(
-      `INSERT INTO catatan_haid (id, santri_id, tanggal, status, catatan, dicatat_oleh)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(id, data.santri_id, data.tanggal, data.status, data.catatan || null, user.sub).run()
-  }
+  const id = row?.id || newId
+  const wasCreated = id === newId
 
   // Audit log tanpa detail status/catatan — ini data kesehatan sensitif,
   // cukup catat bahwa perubahan terjadi dan siapa yang melakukannya.
@@ -131,7 +130,7 @@ catatanHaid.post('/', requireCanMutate(), zValidator('json', upsertSchema), asyn
   ).bind(crypto.randomUUID(), user.sub, id).run()
 
   const result = await c.env.DB.prepare('SELECT * FROM catatan_haid WHERE id = ?').bind(id).first()
-  return c.json({ message: 'Catatan berhasil disimpan.', data: result }, existing ? 200 : 201)
+  return c.json({ message: 'Catatan berhasil disimpan.', data: result }, wasCreated ? 201 : 200)
 })
 
 // DELETE /api/catatan-haid/:id — koreksi kesalahan input
@@ -153,7 +152,8 @@ catatanHaid.delete('/:id', requireCanMutate(), async (c) => {
 
   const access = await assertHaidAccess(c.env, user, existing.santri_id)
   if (!access.ok) {
-    return c.json(forbidden(access.reason), 403)
+    const status = access.reason === 'SANTRI_NOT_FOUND' ? 404 : 403
+    return c.json(forbidden(access.reason), status)
   }
 
   await c.env.DB.prepare('DELETE FROM catatan_haid WHERE id = ?').bind(id).run()

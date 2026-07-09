@@ -43,12 +43,14 @@ const statusLabels: Record<string, string> = {
   aktif: 'Aktif',
   lulus: 'Lulus',
   nonaktif: 'Nonaktif',
+  keluar: 'Keluar',
 }
 
 const statusBadge: Record<string, string> = {
   aktif: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   lulus: 'bg-sky-50 text-sky-700 ring-sky-200',
   nonaktif: 'bg-slate-100 text-slate-600 ring-slate-200',
+  keluar: 'bg-slate-100 text-slate-600 ring-slate-200',
 }
 
 const filtered = computed(() => {
@@ -215,7 +217,7 @@ onMounted(() => {
             <option value="">Semua</option>
             <option value="aktif">Aktif</option>
             <option value="lulus">Lulus</option>
-            <option value="nonaktif">Nonaktif</option>
+            <option value="keluar">Keluar</option>
           </select>
         </div>
       </div>

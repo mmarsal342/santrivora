@@ -41,8 +41,11 @@ kategori.get('/', async (c) => {
   const params: unknown[] = []
 
   if (is_active !== undefined) {
-    query += ' WHERE is_active = ?'
-    params.push(parseInt(is_active))
+    const activeVal = is_active === '1' || is_active === 'true' ? 1 : is_active === '0' || is_active === 'false' ? 0 : null
+    if (activeVal !== null) {
+      query += ' WHERE is_active = ?'
+      params.push(activeVal)
+    }
   }
 
   query += ' ORDER BY urutan_keparahan ASC'
@@ -151,6 +154,10 @@ kategori.delete('/:id', requireAdmin, async (c) => {
   if (usage && usage.count > 0) {
     // Soft delete only
     await c.env.DB.prepare("UPDATE kategori_pelanggaran SET is_active = 0, updated_at = datetime('now') WHERE id = ?").bind(id).run()
+    await c.env.DB.prepare(
+      `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
+       VALUES (?, ?, 'kategori.deactivate', 'kategori_pelanggaran', ?, ?)`
+    ).bind(crypto.randomUUID(), user.sub, id, JSON.stringify({ reason: 'in_use', count: usage.count })).run()
     return c.json({ message: `Kategori dinonaktifkan (masih digunakan di ${usage.count} catatan).` })
   }
 

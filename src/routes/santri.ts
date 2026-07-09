@@ -100,7 +100,7 @@ santri.get('/', async (c) => {
     params.push(cursor)
   }
 
-  const pageLimit = Math.min(parseInt(limit || '20'), 100)
+  const pageLimit = Math.min(Math.max(parseInt(limit || '20') || 20, 1), 100)
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
   const query = `
@@ -148,13 +148,11 @@ santri.get('/:id', async (c) => {
   }
 
   // Scope check — ustadz (via kelas/kamar), kepala_asrama (via jenis_kelamin kamar).
-  // A santri with neither kelas nor kamar assigned is unrestricted for ustadz (legacy).
   if (user.role === 'ustadz') {
     const viaKelas = !!santriData.kelas_id && user.kelas_ids.includes(santriData.kelas_id)
     const viaKamar = !!santriData.kamar_id && user.kamar_ids.includes(santriData.kamar_id)
-    const santriHasAnyAssignment = !!santriData.kelas_id || !!santriData.kamar_id
 
-    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+    if (!viaKelas && !viaKamar) {
       return c.json({
         error: 'Forbidden',
         code: 'SANTRI_NOT_ACCESSIBLE',
@@ -226,14 +224,21 @@ santri.post('/', requireCanMutate(), zValidator('json', createSchema), async (c)
       } as ApiError, 400)
     }
   }
-  // Validate kamar exists
+  // Validate kamar exists + jenis_kelamin match
   if (data.kamar_id) {
-    const kamar = await c.env.DB.prepare('SELECT id FROM kamar WHERE id = ? AND is_active = 1').bind(data.kamar_id).first()
+    const kamar = await c.env.DB.prepare('SELECT id, jenis_kelamin FROM kamar WHERE id = ? AND is_active = 1').bind(data.kamar_id).first<{ jenis_kelamin: string }>()
     if (!kamar) {
       return c.json({
         error: 'Bad Request',
         code: 'KAMAR_NOT_FOUND',
         message: 'Kamar tidak ditemukan atau tidak aktif.'
+      } as ApiError, 400)
+    }
+    if (kamar.jenis_kelamin !== data.jenis_kelamin) {
+      return c.json({
+        error: 'Bad Request',
+        code: 'KAMAR_GENDER_MISMATCH',
+        message: 'Jenis kelamin kamar tidak cocok dengan santri.'
       } as ApiError, 400)
     }
   }
@@ -264,7 +269,7 @@ santri.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async (
   const data = c.req.valid('json')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM santri WHERE id = ?').bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null }>()
+  const existing = await c.env.DB.prepare('SELECT * FROM santri WHERE id = ?').bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null; jenis_kelamin: 'L' | 'P' }>()
   if (!existing) {
     return c.json({
       error: 'Not Found',
@@ -313,14 +318,22 @@ santri.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async (
       } as ApiError, 400)
     }
   }
-  // Validate kamar if changing
+  // Validate kamar if changing — also check jenis_kelamin consistency
   if (data.kamar_id) {
-    const kamar = await c.env.DB.prepare('SELECT id FROM kamar WHERE id = ? AND is_active = 1').bind(data.kamar_id).first()
+    const kamar = await c.env.DB.prepare('SELECT id, jenis_kelamin FROM kamar WHERE id = ? AND is_active = 1').bind(data.kamar_id).first<{ jenis_kelamin: string }>()
     if (!kamar) {
       return c.json({
         error: 'Bad Request',
         code: 'KAMAR_NOT_FOUND',
         message: 'Kamar tidak ditemukan atau tidak aktif.'
+      } as ApiError, 400)
+    }
+    const santriJK = data.jenis_kelamin ?? existing.jenis_kelamin
+    if (kamar.jenis_kelamin !== santriJK) {
+      return c.json({
+        error: 'Bad Request',
+        code: 'KAMAR_GENDER_MISMATCH',
+        message: 'Jenis kelamin kamar tidak cocok dengan santri.'
       } as ApiError, 400)
     }
   }
@@ -374,8 +387,7 @@ santri.delete('/:id', requireCanMutate(), async (c) => {
   if (user.role === 'ustadz') {
     const viaKelas = !!existing.kelas_id && user.kelas_ids.includes(existing.kelas_id)
     const viaKamar = !!existing.kamar_id && user.kamar_ids.includes(existing.kamar_id)
-    const santriHasAnyAssignment = !!existing.kelas_id || !!existing.kamar_id
-    if (santriHasAnyAssignment && !viaKelas && !viaKamar) {
+    if (!viaKelas && !viaKamar) {
       return c.json({
         error: 'Forbidden',
         code: 'SANTRI_NOT_ACCESSIBLE',
@@ -475,12 +487,12 @@ santri.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async (
     try {
       const id = crypto.randomUUID()
       await c.env.DB.prepare(
-        `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, kamar_id, angkatan, tanggal_masuk, tanggal_lahir, love_language)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, kamar_id, angkatan, tanggal_masuk, foto_url, tanggal_lahir, love_language)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         id, s.nama_lengkap, s.jenis_kelamin,
         s.kelas_id || null, s.kamar_id || null, s.angkatan || null, s.tanggal_masuk || null,
-        s.tanggal_lahir || null, s.love_language || null
+        s.foto_url || null, s.tanggal_lahir || null, s.love_language || null
       ).run()
       results.push({ row, status: 'created', id })
     } catch (err: any) {

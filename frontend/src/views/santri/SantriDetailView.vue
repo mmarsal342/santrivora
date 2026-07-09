@@ -2,6 +2,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { santriService, catatanService, kategoriService, catatanHaidService, catatanPerkembanganService } from '@/services'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
 
 interface Kategori {
   id: string
@@ -404,6 +407,7 @@ onMounted(() => {
               </div>
             </div>
             <button
+              v-if="!auth.isReadOnly"
               @click="router.push({ name: 'santri-edit', params: { id: santri.id } })"
               class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
@@ -475,6 +479,7 @@ onMounted(() => {
             <p class="text-xs text-slate-500 mt-0.5">Riwayat pelanggaran &amp; prestasi santri</p>
           </div>
           <button
+            v-if="!auth.isReadOnly"
             @click="openCatatanModal"
             class="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
           >
@@ -532,6 +537,7 @@ onMounted(() => {
                   <div class="flex items-center gap-2">
                     <time class="text-xs text-slate-400">{{ formatDateShort(c.tanggal_kejadian) }}</time>
                     <button
+                      v-if="!auth.isReadOnly"
                       @click="removeCatatan(c.id)"
                       title="Hapus catatan"
                       class="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
@@ -567,6 +573,7 @@ onMounted(() => {
             <p class="text-xs text-slate-500 mt-0.5">Perkembangan, kesehatan, kejadian khusus, dll</p>
           </div>
           <button
+            v-if="!auth.isReadOnly"
             @click="openPerkembanganModal"
             class="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
           >
@@ -603,6 +610,7 @@ onMounted(() => {
                   <div class="flex items-center gap-2">
                     <time class="text-xs text-slate-400">{{ formatDateShort(c.tanggal) }}</time>
                     <button
+                      v-if="!auth.isReadOnly"
                       @click="removePerkembangan(c.id)"
                       title="Hapus catatan"
                       class="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
@@ -641,7 +649,7 @@ onMounted(() => {
         <div class="p-5 space-y-4">
           <div v-if="haidError" class="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ haidError }}</div>
 
-          <form @submit.prevent="submitHaid" class="flex flex-wrap items-end gap-3">
+          <form v-if="!auth.isReadOnly" @submit.prevent="submitHaid" class="flex flex-wrap items-end gap-3">
             <div>
               <label class="mb-1 block text-xs font-medium text-slate-600">Tanggal</label>
               <input

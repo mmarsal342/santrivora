@@ -16,20 +16,25 @@ const submitting = ref(false)
 const success = ref('')
 const error = ref('')
 
-const passwordMismatch = computed(
-  () => form.new_password !== form.confirm_password && form.confirm_password.length > 0
-)
-const tooShort = computed(() => form.new_password.length > 0 && form.new_password.length < 6)
+const passwordRules: Array<(v: string) => string | null> = [
+  (v: string) => v.length >= 8 ? null : 'Minimal 8 karakter',
+  (v: string) => /[A-Z]/.test(v) ? null : 'Butuh huruf kapital',
+  (v: string) => /[a-z]/.test(v) ? null : 'Butuh huruf kecil',
+  (v: string) => /\d/.test(v) ? null : 'Butuh angka',
+  (v: string) => /[^A-Za-z0-9]/.test(v) ? null : 'Butuh karakter spesial'
+]
+const passwordErrors = computed(() => passwordRules.map(r => r(form.new_password)).filter((m): m is string => m !== null))
+const tooShort = computed(() => form.new_password.length > 0 && passwordErrors.value.length > 0)
 
 async function changePassword() {
   success.value = ''
   error.value = ''
 
-  if (tooShort.value) {
-    error.value = 'Password baru minimal 6 karakter'
+  if (passwordErrors.value.length > 0) {
+    error.value = passwordErrors.value[0]
     return
   }
-  if (passwordMismatch.value) {
+  if (form.new_password !== form.confirm_password) {
     error.value = 'Konfirmasi password tidak cocok'
     return
   }
@@ -40,13 +45,22 @@ async function changePassword() {
 
   submitting.value = true
   try {
-    await authService.changePassword(form.current_password, form.new_password)
+    const data = await authService.changePassword(form.current_password, form.new_password)
+    // Backend returns fresh tokens after password change — persist them
+    if (data?.access_token) {
+      auth.token = data.access_token
+      localStorage.setItem('access_token', data.access_token)
+      if (data.refresh_token) {
+        localStorage.setItem('refresh_token', data.refresh_token)
+      }
+    }
     success.value = 'Password berhasil diubah'
     form.current_password = ''
     form.new_password = ''
     form.confirm_password = ''
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal mengubah password'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal mengubah password'
   } finally {
     submitting.value = false
   }
@@ -114,7 +128,7 @@ function logout() {
             autocomplete="new-password"
             class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
           />
-          <p v-if="tooShort" class="mt-1 text-xs text-red-600">Minimal 6 karakter</p>
+          <p v-if="tooShort" class="mt-1 text-xs text-red-600">{{ passwordErrors[0] }}</p>
         </div>
         <div>
           <label class="mb-1 block text-sm font-medium text-gray-700">Konfirmasi Password Baru</label>
@@ -124,7 +138,7 @@ function logout() {
             autocomplete="new-password"
             class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
           />
-          <p v-if="passwordMismatch" class="mt-1 text-xs text-red-600">Password tidak cocok</p>
+          <p v-if="form.new_password !== form.confirm_password && form.confirm_password.length > 0" class="mt-1 text-xs text-red-600">Password tidak cocok</p>
         </div>
         <button
           type="submit"

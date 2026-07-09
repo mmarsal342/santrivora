@@ -63,8 +63,8 @@ pesan.post('/', requireAnyRole('kyai', 'admin'), zValidator('json', sendSchema),
 // Pesan masuk = direct ke saya, broadcast semua, atau broadcast asrama saya.
 pesan.get('/inbox', async (c) => {
   const user = c.get('user')
-  const page = parseInt(c.req.query('page') || '1')
-  const limit = parseInt(c.req.query('limit') || '50')
+  const page = Math.max(parseInt(c.req.query('page') || '1') || 1, 1)
+  const limit = Math.min(Math.max(parseInt(c.req.query('limit') || '50') || 50, 1), 200)
   const offset = (page - 1) * limit
 
   const rows = await c.env.DB.prepare(
@@ -79,9 +79,10 @@ pesan.get('/inbox', async (c) => {
        OR (p.penerima_id IS NULL AND p.asrama_jenis IN (
             SELECT k.jenis_kelamin FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = ?
        ))
+       OR (p.penerima_id IS NULL AND p.asrama_jenis = ?)
      ORDER BY p.created_at DESC
      LIMIT ? OFFSET ?`
-  ).bind(user.sub, user.sub, user.sub, limit, offset).all()
+  ).bind(user.sub, user.sub, user.sub, user.asrama_jenis || '', limit, offset).all()
 
   const total = await c.env.DB.prepare(
     `SELECT COUNT(*) as count FROM pesan p
@@ -90,8 +91,9 @@ pesan.get('/inbox', async (c) => {
        OR (p.penerima_id IS NULL AND p.asrama_jenis IS NULL)
        OR (p.penerima_id IS NULL AND p.asrama_jenis IN (
             SELECT k.jenis_kelamin FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = ?
-       ))`
-  ).bind(user.sub, user.sub).first<{ count: number }>()
+       ))
+       OR (p.penerima_id IS NULL AND p.asrama_jenis = ?)`
+  ).bind(user.sub, user.sub, user.asrama_jenis || '').first<{ count: number }>()
 
   return c.json({
     data: rows.results || [],
@@ -111,13 +113,14 @@ pesan.get('/unread-count', async (c) => {
   const row = await c.env.DB.prepare(
     `SELECT COUNT(*) as count FROM pesan p
      WHERE
-       (p.penerima_id = ?
-        OR (p.penerima_id IS NULL AND p.asrama_jenis IS NULL)
-        OR (p.penerima_id IS NULL AND p.asrama_jenis IN (
-             SELECT k.jenis_kelamin FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = ?
-        )))
-       AND NOT EXISTS (SELECT 1 FROM pesan_dibaca pd WHERE pd.pesan_id = p.id AND pd.user_id = ?)`
-  ).bind(user.sub, user.sub, user.sub).first<{ count: number }>()
+       ((p.penerima_id = ?
+         OR (p.penerima_id IS NULL AND p.asrama_jenis IS NULL)
+         OR (p.penerima_id IS NULL AND p.asrama_jenis IN (
+              SELECT k.jenis_kelamin FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = ?
+         ))
+         OR (p.penerima_id IS NULL AND p.asrama_jenis = ?))
+        AND NOT EXISTS (SELECT 1 FROM pesan_dibaca pd WHERE pd.pesan_id = p.id AND pd.user_id = ?))`
+  ).bind(user.sub, user.sub, user.asrama_jenis || '', user.sub).first<{ count: number }>()
 
   return c.json({ data: { unread: row?.count || 0 } })
 })
@@ -125,8 +128,8 @@ pesan.get('/unread-count', async (c) => {
 // GET /api/pesan/sent — daftar pesan terkirim (kyai & admin)
 pesan.get('/sent', requireAnyRole('kyai', 'admin'), async (c) => {
   const user = c.get('user')
-  const page = parseInt(c.req.query('page') || '1')
-  const limit = parseInt(c.req.query('limit') || '50')
+  const page = Math.max(parseInt(c.req.query('page') || '1') || 1, 1)
+  const limit = Math.min(Math.max(parseInt(c.req.query('limit') || '50') || 50, 1), 200)
   const offset = (page - 1) * limit
 
   const rows = await c.env.DB.prepare(
@@ -155,16 +158,46 @@ pesan.get('/:id', async (c) => {
   const row = await c.env.DB.prepare(
     `SELECT p.*, u.nama_lengkap as pengirim_nama
      FROM pesan p LEFT JOIN users u ON p.pengirim_id = u.id WHERE p.id = ?`
-  ).bind(id).first<{ penerima_id: string | null; asrama_jenis: string | null }>()
+  ).bind(id).first<{ pengirim_id: string; penerima_id: string | null; asrama_jenis: string | null }>()
 
   if (!row) {
     return c.json({ error: 'Not Found', code: 'PESAN_NOT_FOUND', message: 'Pesan tidak ditemukan.' } as ApiError, 404)
   }
 
-  // Auto mark read: insert pesan_dibaca (idempotent via PK)
-  await c.env.DB.prepare(
-    `INSERT OR IGNORE INTO pesan_dibaca (pesan_id, user_id) VALUES (?, ?)`
-  ).bind(id, user.sub).run()
+  const isSender = row.pengirim_id === user.sub
+  const isDirectRecipient = row.penerima_id === user.sub
+  // Broadcast: penerima_id IS NULL. Global broadcast (asrama_jenis NULL) → semua user.
+  // Asrama broadcast → cek apakah user punya kamar di asrama itu (ustadz) atau kepala_asrama asrama itu.
+  let isBroadcastRecipient = false
+  if (row.penerima_id === null) {
+    if (row.asrama_jenis === null) {
+      isBroadcastRecipient = true
+    } else {
+      // kepala_asrama asrama itu, atau ustadz yang pegang kamar asrama itu
+      if (user.role === 'kyai') {
+        isBroadcastRecipient = false
+      } else if (user.role === 'kepala_asrama') {
+        isBroadcastRecipient = user.asrama_jenis === row.asrama_jenis
+      } else {
+        const kamarMatch = await c.env.DB.prepare(
+          `SELECT 1 FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id
+           WHERE uk.user_id = ? AND k.jenis_kelamin = ? LIMIT 1`
+        ).bind(user.sub, row.asrama_jenis).first()
+        isBroadcastRecipient = !!kamarMatch
+      }
+    }
+  }
+
+  if (!isSender && !isDirectRecipient && !isBroadcastRecipient) {
+    return c.json({ error: 'Forbidden', code: 'PESAN_NOT_ACCESSIBLE', message: 'Anda tidak memiliki akses ke pesan ini.' } as ApiError, 403)
+  }
+
+  // Auto mark read: insert pesan_dibaca (idempotent via PK) — hanya untuk penerima/broadcast audience
+  if (isDirectRecipient || isBroadcastRecipient) {
+    await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO pesan_dibaca (pesan_id, user_id) VALUES (?, ?)`
+    ).bind(id, user.sub).run()
+  }
 
   const result = await c.env.DB.prepare('SELECT * FROM pesan WHERE id = ?').bind(id).first()
   return c.json({ data: { ...result, pengirim_nama: (row as any).pengirim_nama } })
