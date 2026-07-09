@@ -193,7 +193,7 @@ sync.get('/conflicts', async (c) => {
     results = dbResult.results || []
   } else {
     const dbResult = await c.env.DB.prepare(
-      "SELECT * FROM sync_conflicts WHERE status = 'pending' AND resolved_by = ? ORDER BY created_at DESC LIMIT 50"
+      "SELECT * FROM sync_conflicts WHERE status = 'pending' AND user_id = ? ORDER BY created_at DESC LIMIT 50"
     ).bind(user.sub).all()
     results = dbResult.results || []
   }
@@ -347,8 +347,8 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
 
       const newId = serverId || crypto.randomUUID()
       await env.DB.prepare(
-        `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, kamar_id, angkatan, tanggal_masuk, foto_url, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`
+        `INSERT INTO santri (id, nama_lengkap, jenis_kelamin, kelas_id, kamar_id, angkatan, tanggal_masuk, foto_url, tanggal_lahir, love_language, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
       ).bind(
         newId,
         item.data.nama_lengkap || '',
@@ -357,7 +357,9 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
         item.data.kamar_id || null,
         item.data.angkatan || null,
         item.data.tanggal_masuk || null,
-        item.data.foto_url || null
+        item.data.foto_url || null,
+        item.data.tanggal_lahir || null,
+        item.data.love_language || null
       ).run()
 
       return { local_id: item.local_id, status: 'synced', server_id: newId, server_version: 1 }
@@ -523,8 +525,8 @@ async function processCatatanSync(env: Env, item: any, user: UserPayload): Promi
 
       const newId = serverId || crypto.randomUUID()
       await env.DB.prepare(
-        `INSERT INTO catatan_disiplin (id, santri_id, tipe, kategori_id, judul, deskripsi, tanggal_kejadian, dicatat_oleh, tindak_lanjut, version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+        `INSERT INTO catatan_disiplin (id, santri_id, tipe, kategori_id, judul, deskripsi, tanggal_kejadian, dicatat_oleh, tindak_lanjut, jenis_prestasi, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
       ).bind(
         newId,
         santriId,
@@ -534,7 +536,8 @@ async function processCatatanSync(env: Env, item: any, user: UserPayload): Promi
         item.data.deskripsi || null,
         item.data.tanggal_kejadian || '',
         user.sub,
-        item.data.tindak_lanjut || null
+        item.data.tindak_lanjut || null,
+        item.data.jenis_prestasi || null
       ).run()
 
       return { local_id: item.local_id, status: 'synced', server_id: newId, server_version: 1 }

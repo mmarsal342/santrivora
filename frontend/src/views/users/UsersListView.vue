@@ -62,7 +62,8 @@ async function fetchUsers() {
     const res = await adminService.getUsers(activeTab.value, 1, 100)
     users.value = res.data ?? []
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal memuat pengguna'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal memuat pengguna'
   } finally {
     loading.value = false
   }
@@ -99,7 +100,8 @@ async function suspendUser(id: string) {
     await adminService.suspendUser(id)
     await fetchUsers()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal menangguhkan pengguna'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal menangguhkan pengguna'
   }
 }
 
@@ -108,7 +110,8 @@ async function activateUser(id: string) {
     await adminService.activateUser(id)
     await fetchUsers()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal mengaktifkan pengguna'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal mengaktifkan pengguna'
   }
 }
 

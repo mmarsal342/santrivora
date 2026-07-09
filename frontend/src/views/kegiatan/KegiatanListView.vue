@@ -71,7 +71,8 @@ async function fetchList() {
   try {
     list.value = await kegiatanService.list()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal memuat kegiatan'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal memuat kegiatan'
   } finally {
     loading.value = false
   }

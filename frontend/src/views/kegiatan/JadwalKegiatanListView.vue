@@ -62,7 +62,8 @@ async function fetchList() {
   try {
     list.value = await jadwalKegiatanService.list()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal memuat jadwal kegiatan'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal memuat jadwal kegiatan'
   } finally {
     loading.value = false
   }

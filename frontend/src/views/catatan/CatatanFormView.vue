@@ -113,7 +113,8 @@ async function submit() {
     await catatanService.create(payload)
     router.push({ name: 'catatan' })
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal menyimpan catatan'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal menyimpan catatan'
   } finally {
     submitting.value = false
   }

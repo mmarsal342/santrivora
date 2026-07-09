@@ -39,7 +39,8 @@ async function fetchList() {
   try {
     list.value = (await kamarService.list()) as Kamar[]
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal memuat kamar'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal memuat kamar'
   } finally {
     loading.value = false
   }
@@ -79,7 +80,8 @@ async function submit() {
     resetForm()
     await fetchList()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal menyimpan kamar'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal menyimpan kamar'
   } finally {
     submitting.value = false
   }
@@ -100,7 +102,8 @@ async function doDelete() {
     list.value = list.value.filter((k) => k.id !== deleteTarget.value!.id)
     deleteTarget.value = null
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal menghapus kamar'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal menghapus kamar'
   }
 }
 

@@ -37,7 +37,8 @@ async function fetchList() {
   try {
     list.value = (await kategoriService.list()) as Kategori[]
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal memuat kategori'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal memuat kategori'
   } finally {
     loading.value = false
   }
@@ -77,7 +78,8 @@ async function submit() {
     resetForm()
     await fetchList()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal menyimpan kategori'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal menyimpan kategori'
   } finally {
     submitting.value = false
   }
@@ -94,7 +96,8 @@ async function doDelete() {
     list.value = list.value.filter((k) => k.id !== deleteTarget.value!.id)
     deleteTarget.value = null
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal menghapus kategori'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal menghapus kategori'
   }
 }
 

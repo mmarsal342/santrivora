@@ -343,6 +343,8 @@ admin.post('/users/:id/assign-role', requireRole('admin'), zValidator('json', as
       await c.env.DB.prepare(
         `UPDATE users SET role = 'ustadz', asrama_jenis = NULL, updated_at = datetime('now') WHERE id = ?`
       ).bind(existing.id).run()
+      // Revoke demoted user's sessions so their old kepala_asrama token stops working
+      await c.env.DB.prepare('UPDATE sessions SET is_revoked = 1 WHERE user_id = ?').bind(existing.id).run()
       await c.env.DB.prepare(
         `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
          VALUES (?, ?, 'user.demote_from_kepala', 'users', ?, ?)`

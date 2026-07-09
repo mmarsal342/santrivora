@@ -111,6 +111,10 @@ async function sendPesan() {
     composeError.value = 'Judul dan isi wajib diisi.'
     return
   }
+  if (composeForm.value.targetMode === 'specific' && !composeForm.value.penerima_id) {
+    composeError.value = 'Pilih ustadz penerima terlebih dahulu.'
+    return
+  }
   sending.value = true
   try {
     const payload: { judul: string; isi: string; prioritas?: 'biasa' | 'penting'; penerima_id?: string; asrama_jenis?: 'L' | 'P' } = {

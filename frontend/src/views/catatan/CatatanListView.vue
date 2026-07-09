@@ -65,7 +65,8 @@ async function fetchCatatan(reset = false) {
     cursor.value = res.pagination?.cursor
     hasMore.value = !!res.pagination?.hasMore
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal memuat catatan'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal memuat catatan'
   } finally {
     loading.value = false
     loadingMore.value = false
@@ -78,7 +79,8 @@ async function removeCatatan(id: string) {
     await catatanService.remove(id)
     catatanList.value = catatanList.value.filter((c) => c.id !== id)
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : 'Gagal menghapus catatan'
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal menghapus catatan'
   }
 }
 
