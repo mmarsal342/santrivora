@@ -38,7 +38,7 @@ const updateSchema = z.object({
 // GET /api/santri — scoped by role (wali kelas via kelas_ids, wali kamar via kamar_ids)
 santri.get('/', async (c) => {
   const user = c.get('user')
-  const { kelas_id, kamar_id, jenis_kelamin, angkatan, status, cursor, limit } = c.req.query()
+  const { kelas_id, kamar_id, jenis_kelamin, angkatan, status, q, cursor, limit } = c.req.query()
 
   const params: unknown[] = []
   const conditions: string[] = []
@@ -94,6 +94,10 @@ santri.get('/', async (c) => {
   if (status) {
     conditions.push('s.status = ?')
     params.push(status)
+  }
+  if (q) {
+    conditions.push('s.nama_lengkap LIKE ?')
+    params.push(`%${q}%`)
   }
   if (cursor) {
     conditions.push('s.id > ?')

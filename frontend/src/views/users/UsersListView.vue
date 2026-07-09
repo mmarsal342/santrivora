@@ -75,6 +75,7 @@ function switchTab(tab: TabStatus) {
 }
 
 function openApprove(u: User) {
+  error.value = ''
   approveTarget.value = u
   approveForm.kamar_ids = u.assigned_kamar?.map((k) => k.id) ?? []
 }
@@ -116,6 +117,7 @@ async function activateUser(id: string) {
 }
 
 function openReset(u: User) {
+  error.value = ''
   resetTarget.value = u
   resetForm.new_password = ''
 }
@@ -164,6 +166,7 @@ function roleLabel(role: string, asrama?: string | null): string {
 }
 
 function openRole(u: User) {
+  error.value = ''
   roleTarget.value = u
   roleForm.role = u.role === 'admin' ? 'ustadz' : u.role
   roleForm.asrama_jenis = u.asrama_jenis || 'L'
@@ -339,8 +342,9 @@ onMounted(() => {
       <div class="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
         <h2 class="mb-1 text-lg font-semibold text-gray-900">Setujui Pengguna</h2>
         <p class="mb-4 text-sm text-gray-500">
-          Pilih kamar untuk <strong>{{ approveTarget.nama_lengkap }}</strong>
+           Pilih kamar untuk <strong>{{ approveTarget.nama_lengkap }}</strong>
         </p>
+        <div v-if="error" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{{ error }}</div>
         <div class="mb-4 max-h-60 space-y-2 overflow-y-auto">
           <label
             v-for="k in kamarList"
@@ -390,8 +394,9 @@ onMounted(() => {
       <div class="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
         <h2 class="mb-1 text-lg font-semibold text-gray-900">Reset Password</h2>
         <p class="mb-4 text-sm text-gray-500">
-          Atur password baru untuk <strong>{{ resetTarget.nama_lengkap }}</strong>
+           Atur password baru untuk <strong>{{ resetTarget.nama_lengkap }}</strong>
         </p>
+        <div v-if="error" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{{ error }}</div>
         <div class="mb-4">
           <label class="mb-1 block text-sm font-medium text-gray-700">Password Baru</label>
           <input
@@ -430,8 +435,9 @@ onMounted(() => {
       <div class="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
         <h2 class="mb-1 text-lg font-semibold text-gray-900">Atur Peran</h2>
         <p class="mb-4 text-sm text-gray-500">
-          Pilih peran untuk <strong>{{ roleTarget.nama_lengkap }}</strong>
+           Pilih peran untuk <strong>{{ roleTarget.nama_lengkap }}</strong>
         </p>
+        <div v-if="error" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{{ error }}</div>
         <div class="mb-4 space-y-2">
           <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition hover:bg-gray-50">
             <input v-model="roleForm.role" type="radio" value="ustadz" class="h-4 w-4 text-emerald-600" />

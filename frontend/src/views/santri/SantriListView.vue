@@ -53,11 +53,7 @@ const statusBadge: Record<string, string> = {
   keluar: 'bg-slate-100 text-slate-600 ring-slate-200',
 }
 
-const filtered = computed(() => {
-  const q = search.value.trim().toLowerCase()
-  if (!q) return items.value
-  return items.value.filter((s) => s.nama_lengkap.toLowerCase().includes(q))
-})
+const filtered = computed(() => items.value)
 
 function kelaminLabel(k: string) {
   return k === 'L' ? 'Laki-laki' : k === 'P' ? 'Perempuan' : k
@@ -80,6 +76,7 @@ async function fetchList(append = false) {
     if (filterKamar.value) params.kamar_id = filterKamar.value
     if (filterKelamin.value) params.jenis_kelamin = filterKelamin.value
     if (filterStatus.value) params.status = filterStatus.value
+    if (search.value.trim()) params.q = search.value.trim()
     if (append && cursor.value) params.cursor = cursor.value
 
     const res = await santriService.list(params)
@@ -111,6 +108,15 @@ function resetFilters() {
 watch([filterKamar, filterKelamin, filterStatus], () => {
   cursor.value = undefined
   fetchList(false)
+})
+
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+watch(search, () => {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    cursor.value = undefined
+    fetchList(false)
+  }, 300)
 })
 
 function confirmDelete(s: Santri) {

@@ -47,11 +47,13 @@ async function fetchList() {
 }
 
 function openCreate() {
+  error.value = ''
   resetForm()
   modalOpen.value = true
 }
 
 function openEdit(k: Kelas) {
+  error.value = ''
   editingId.value = k.id
   form.nama = k.nama
   form.tingkatan = k.tingkatan ?? ''
@@ -213,6 +215,7 @@ onMounted(fetchList)
         <h2 class="mb-4 text-lg font-semibold text-gray-900">
           {{ editingId ? 'Edit Kelas' : 'Tambah Kelas' }}
         </h2>
+        <div v-if="error" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{{ error }}</div>
         <form class="space-y-4" @submit.prevent="submit">
           <div>
             <label class="mb-1 block text-sm font-medium text-gray-700">Nama <span class="text-red-500">*</span></label>

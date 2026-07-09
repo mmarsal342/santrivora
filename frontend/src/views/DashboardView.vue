@@ -248,6 +248,12 @@ async function loadWaliKamar() {
 }
 
 function applyPeriod() {
+  if (periodDari.value && !periodSampai.value) {
+    periodSampai.value = new Date().toISOString().slice(0, 10)
+  } else if (periodSampai.value && !periodDari.value) {
+    waliError.value = 'Tanggal awal wajib diisi.'
+    return
+  }
   loadWaliKamar()
 }
 

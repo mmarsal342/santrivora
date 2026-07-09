@@ -164,10 +164,12 @@ async function submit() {
 }
 
 watch(selectedKamar, () => {
+  selectedKegiatan.value = ''
   loadKegiatan()
   loadRoster()
 })
 watch(tanggal, () => {
+  selectedKegiatan.value = ''
   loadKegiatan()
   loadRoster()
 })
