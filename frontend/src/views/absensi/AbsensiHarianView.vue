@@ -119,11 +119,12 @@ async function loadRoster() {
       }
     })
   } catch (e: unknown) {
+    if (myGen !== rosterGen) return
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal memuat daftar santri.'
     santriRows.value = []
   } finally {
-    loadingRoster.value = false
+    if (myGen === rosterGen) loadingRoster.value = false
   }
 }
 

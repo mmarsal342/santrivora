@@ -394,7 +394,7 @@ onMounted(() => {
           <input
             v-model="resetForm.new_password"
             type="password"
-            placeholder="Minimal 6 karakter"
+            placeholder="Minimal 8 karakter (huruf besar, kecil, angka, simbol)"
             class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
           />
         </div>

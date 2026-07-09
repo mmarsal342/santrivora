@@ -97,6 +97,7 @@ async function loadRecipients() {
 }
 
 function openCompose() {
+  if (composeTimer.value) { clearTimeout(composeTimer.value); composeTimer.value = null }
   showCompose.value = true
   composeError.value = ''
   composeSuccess.value = ''

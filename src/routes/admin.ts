@@ -259,9 +259,9 @@ admin.post('/users/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zVali
     }
   }
 
-  // Update user status (no-op kalau sudah approved)
+  // Update user status (no-op kalau sudah approved), reset failed login attempts
   await c.env.DB.prepare(
-    `UPDATE users SET status = 'approved', updated_at = datetime('now') WHERE id = ?`
+    `UPDATE users SET status = 'approved', failed_login_attempts = 0, updated_at = datetime('now') WHERE id = ?`
   ).bind(userId).run()
 
   // Assign kamar (delete old + insert new)
@@ -275,9 +275,8 @@ admin.post('/users/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zVali
     await c.env.DB.batch(batch)
   }
 
-  // Revoke sessions + blacklist access tokens so kamar_ids in token must be re-fetched
+  // Revoke sessions so stale kamar_ids in token can't be refreshed
   await c.env.DB.prepare('UPDATE sessions SET is_revoked = 1 WHERE user_id = ?').bind(userId).run()
-  await c.env.KV.put(`blacklist:user:${userId}`, 'true', { expirationTtl: 900 })
 
   // Audit log — beda action buat approval pertama vs sekadar edit kamar belakangan
   await c.env.DB.prepare(
@@ -359,9 +358,6 @@ admin.post('/users/:id/assign-role', requireRole('admin'), zValidator('json', as
   // Revoke sessions supaya token baru (dengan role/asrama baru) wajib di-refresh
   await c.env.DB.prepare('UPDATE sessions SET is_revoked = 1 WHERE user_id = ?').bind(userId).run()
 
-  // Blacklist user's access tokens
-  await c.env.KV.put(`blacklist:user:${userId}`, 'true', { expirationTtl: 900 })
-
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, old_value, new_value)
      VALUES (?, ?, 'user.assign_role', 'users', ?, ?, ?)`
@@ -419,9 +415,6 @@ admin.post('/users/:id/suspend', requireRole('admin'), async (c) => {
     'UPDATE sessions SET is_revoked = 1 WHERE user_id = ?'
   ).bind(userId).run()
 
-  // Blacklist user's access tokens for their remaining lifetime (max 15 min)
-  await c.env.KV.put(`blacklist:user:${userId}`, 'true', { expirationTtl: 900 })
-
   // Audit log
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id)
@@ -437,7 +430,7 @@ admin.post('/users/:id/activate', requireRole('admin'), async (c) => {
   const adminUser = c.get('user')
 
   await c.env.DB.prepare(
-    `UPDATE users SET status = 'approved', updated_at = datetime('now') WHERE id = ? AND status = 'suspended'`
+    `UPDATE users SET status = 'approved', failed_login_attempts = 0, updated_at = datetime('now') WHERE id = ? AND status = 'suspended'`
   ).bind(userId).run()
 
   await c.env.DB.prepare(
@@ -476,9 +469,6 @@ admin.post('/users/:id/reset-password', requireRole('admin'), zValidator('json',
   await c.env.DB.prepare(
     'UPDATE sessions SET is_revoked = 1 WHERE user_id = ?'
   ).bind(userId).run()
-
-  // Blacklist user's access tokens
-  await c.env.KV.put(`blacklist:user:${userId}`, 'true', { expirationTtl: 900 })
 
   // Audit log
   await c.env.DB.prepare(

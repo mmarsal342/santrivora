@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
-import { generateTokens, hashPassword, verifyPassword, verifyRefreshToken, validatePasswordStrength } from '../services/auth'
+import { generateTokens, hashPassword, verifyPassword, verifyRefreshToken, verifyAccessToken, validatePasswordStrength } from '../services/auth'
 import { authMiddleware } from '../middleware/auth'
 import type { ApiError, Env, UserPayload } from '../types'
 
@@ -314,10 +314,8 @@ auth.post('/logout', async (c) => {
   if (accessToken) {
     // Blacklist the access token
     try {
-      const parts = accessToken.split('.')
-      if (parts.length === 3) {
-        const payloadB64 = parts[1]
-        const payload = JSON.parse(atob(payloadB64)) as { jti: string; exp: number }
+      const payload = await verifyAccessToken(accessToken, c.env.JWT_ACCESS_SECRET)
+      if (payload) {
         const remainingSeconds = payload.exp - Math.floor(Date.now() / 1000)
         if (remainingSeconds > 0) {
           await c.env.KV.put(`blacklist:${payload.jti}`, 'true', {

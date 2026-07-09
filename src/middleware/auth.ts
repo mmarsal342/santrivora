@@ -30,19 +30,9 @@ export const authMiddleware = async (c: Context<{ Bindings: Env; Variables: { us
     } as ApiError, 401)
   }
 
-  // Check if token is blacklisted
+  // Check if token is blacklisted (per-token, not per-user)
   const isBlacklisted = await c.env.KV.get(`blacklist:${payload.jti}`)
   if (isBlacklisted) {
-    return c.json({
-      error: 'Unauthorized',
-      code: 'TOKEN_REVOKED',
-      message: 'Sesi telah berakhir. Silakan login kembali.'
-    } as ApiError, 401)
-  }
-
-  // Check if user has been suspended/locked (covers the access-token window after suspend)
-  const userLocked = await c.env.KV.get(`blacklist:user:${payload.sub}`)
-  if (userLocked) {
     return c.json({
       error: 'Unauthorized',
       code: 'TOKEN_REVOKED',

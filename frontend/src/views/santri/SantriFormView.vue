@@ -40,8 +40,10 @@ const form = reactive({
 
 const kamarOptionsForGender = computed(() => kamarOptions.value.filter((k) => k.jenis_kelamin === form.jenis_kelamin))
 
-// Reset kamar_id if it's no longer valid for the selected gender
+// Reset kamar_id if it's no longer valid for the selected gender (but not during initial load)
+const initialLoadDone = ref(false)
 watch(() => form.jenis_kelamin, () => {
+  if (!initialLoadDone.value) return
   if (form.kamar_id && !kamarOptionsForGender.value.some((k) => k.id === form.kamar_id)) {
     form.kamar_id = ''
   }
@@ -169,6 +171,7 @@ async function submit() {
 
 onMounted(async () => {
   await Promise.all([loadKelas(), loadKamar(), loadSantri()])
+  initialLoadDone.value = true
 })
 </script>
 
