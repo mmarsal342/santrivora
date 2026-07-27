@@ -48,10 +48,34 @@ absensi.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async 
 
   const results: Array<{ santri_id: string; status: string; id?: string; error?: string }> = []
 
+  // Batch lookup semua santri di batch ini sekali jalan, dan batch cek row
+  // absensi yang sudah ada untuk (tanggal, kegiatan_id) ini — dulu ini masing-
+  // masing 1 query PER ITEM (termasuk query verifikasi created/updated
+  // sesudah UPSERT), jadi bisa sampai ~4 round-trip/item untuk batch sampai
+  // 200 item. Sekarang cuma 2 query total buat semuanya, tidak peduli ukuran
+  // batch, ditambah 1 UPSERT per item (yang gak bisa dihindari tanpa mengubah
+  // semantic per-item error reporting di bawah).
+  const santriIds = [...new Set(items.map((item) => item.santri_id))]
+  const santriPh = santriIds.map(() => '?').join(',')
+  const santriRows = await c.env.DB.prepare(
+    `SELECT id, kamar_id FROM santri WHERE id IN (${santriPh})`
+  ).bind(...santriIds).all<{ id: string; kamar_id: string | null }>()
+  const santriMap = new Map((santriRows.results || []).map((s) => [s.id, s]))
+
+  const existingRows = await c.env.DB.prepare(
+    `SELECT id, santri_id FROM absensi
+     WHERE tanggal = ? AND COALESCE(kegiatan_id, '') = COALESCE(?, '') AND santri_id IN (${santriPh})`
+  ).bind(tanggal, kegiatan_id || null, ...santriIds).all<{ id: string; santri_id: string }>()
+  // Map santri_id -> id absensi yang sudah ada (kalau ada). Di-update juga di
+  // dalam loop supaya santri_id yang dobel di `items` yang sama tetap benar
+  // (item ke-2 harus lihat baris yang baru dibuat item ke-1, bukan state DB
+  // sebelum request ini mulai).
+  const existingIdBySantri = new Map((existingRows.results || []).map((r) => [r.santri_id, r.id]))
+
+  const kamarAccessCache = new Map<string, boolean>()
+
   for (const item of items) {
-    const santri = await c.env.DB.prepare(
-      'SELECT id, kamar_id FROM santri WHERE id = ?'
-    ).bind(item.santri_id).first<{ id: string; kamar_id: string | null }>()
+    const santri = santriMap.get(item.santri_id)
 
     if (!santri) {
       results.push({ santri_id: item.santri_id, status: 'error', error: 'SANTRI_NOT_FOUND' })
@@ -62,12 +86,20 @@ absensi.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async 
       results.push({ santri_id: item.santri_id, status: 'error', error: 'KAMAR_NOT_ASSIGNED' })
       continue
     }
-    if (user.role === 'kepala_asrama' && !(await canAccessKamar(c.env, user, santri.kamar_id))) {
-      results.push({ santri_id: item.santri_id, status: 'error', error: 'KAMAR_NOT_IN_ASRAMA' })
-      continue
+    if (user.role === 'kepala_asrama') {
+      let allowed = santri.kamar_id ? kamarAccessCache.get(santri.kamar_id) : false
+      if (allowed === undefined) {
+        allowed = await canAccessKamar(c.env, user, santri.kamar_id)
+        if (santri.kamar_id) kamarAccessCache.set(santri.kamar_id, allowed)
+      }
+      if (!allowed) {
+        results.push({ santri_id: item.santri_id, status: 'error', error: 'KAMAR_NOT_IN_ASRAMA' })
+        continue
+      }
     }
 
     // UPSERT — race-safe via ON CONFLICT (replaces SELECT-then-INSERT)
+    const existingId = existingIdBySantri.get(item.santri_id)
     const newId = crypto.randomUUID()
     await c.env.DB.prepare(
       `INSERT INTO absensi (id, santri_id, tanggal, kegiatan_id, status, keterangan, dicatat_oleh)
@@ -77,12 +109,9 @@ absensi.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async 
          version = version + 1, updated_at = datetime('now')`
     ).bind(newId, item.santri_id, tanggal, kegiatan_id || null, item.status, item.keterangan || null, user.sub).run()
 
-    const row = await c.env.DB.prepare(
-      `SELECT id FROM absensi WHERE santri_id = ? AND tanggal = ? AND COALESCE(kegiatan_id, '') = COALESCE(?, '')`
-    ).bind(item.santri_id, tanggal, kegiatan_id || null).first<{ id: string }>()
-
-    const wasCreated = row?.id === newId
-    results.push({ santri_id: item.santri_id, status: wasCreated ? 'created' : 'updated', id: row?.id || newId })
+    const finalId = existingId || newId
+    results.push({ santri_id: item.santri_id, status: existingId ? 'updated' : 'created', id: finalId })
+    existingIdBySantri.set(item.santri_id, finalId)
   }
 
   const success = results.filter((r) => r.status === 'created' || r.status === 'updated').length
