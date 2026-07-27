@@ -62,3 +62,28 @@ describe('santri.ts — DELETE /:id scoping (regresi: dulu cuma cek kelas_id, bi
     expect(res.status).toBe(403)
   })
 })
+
+// Audit MEDIUM #6: single-create (POST /) sudah cek gender kamar vs santri, tapi
+// bulk import (POST /bulk) belum — bisa nyelipin santri putri ke kamar putra dst.
+describe('santri.ts — POST /bulk juga divalidasi gender-nya, bukan cuma single-create', () => {
+  it('baris dengan gender santri tidak cocok kamar ditolak KAMAR_GENDER_MISMATCH, baris valid lain di batch yang sama tetap sukses', async () => {
+    const kamarPutra = await seedKamar({ jenis_kelamin: 'L' })
+    const admin = await seedUser({ role: 'admin' })
+
+    const res = await santriRoutes.request('/bulk', {
+      method: 'POST',
+      headers: authHeaders(admin.accessToken),
+      body: JSON.stringify({
+        santri: [
+          { nama_lengkap: 'Santri Putri Salah Kamar', jenis_kelamin: 'P', kamar_id: kamarPutra },
+          { nama_lengkap: 'Santri Putra Benar', jenis_kelamin: 'L', kamar_id: kamarPutra }
+        ]
+      })
+    }, testEnv())
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: { results: Array<{ row: number; status: string; error?: string }> } }
+    expect(body.data.results[0]).toMatchObject({ row: 0, status: 'error', error: 'KAMAR_GENDER_MISMATCH' })
+    expect(body.data.results[1]).toMatchObject({ row: 1, status: 'created' })
+  })
+})

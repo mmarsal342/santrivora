@@ -431,7 +431,7 @@ santri.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async (
 
   const results: Array<{ row: number; status: 'created' | 'error'; id?: string; error?: string }> = []
   const kelasCache = new Map<string, boolean>()
-  const kamarCache = new Map<string, boolean>()
+  const kamarCache = new Map<string, { valid: boolean; jenisKelamin?: 'L' | 'P' }>()
   const asramaKamarCache = new Map<string, boolean>()
 
   for (let row = 0; row < santriList.length; row++) {
@@ -474,16 +474,22 @@ santri.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async (
     }
 
     if (s.kamar_id) {
-      let kamarValid = kamarCache.get(s.kamar_id)
-      if (kamarValid === undefined) {
+      let kamarInfo = kamarCache.get(s.kamar_id)
+      if (kamarInfo === undefined) {
         const kamar = await c.env.DB.prepare(
-          'SELECT id FROM kamar WHERE id = ? AND is_active = 1'
-        ).bind(s.kamar_id).first()
-        kamarValid = !!kamar
-        kamarCache.set(s.kamar_id, kamarValid)
+          'SELECT id, jenis_kelamin FROM kamar WHERE id = ? AND is_active = 1'
+        ).bind(s.kamar_id).first<{ jenis_kelamin: 'L' | 'P' }>()
+        kamarInfo = kamar ? { valid: true, jenisKelamin: kamar.jenis_kelamin } : { valid: false }
+        kamarCache.set(s.kamar_id, kamarInfo)
       }
-      if (!kamarValid) {
+      if (!kamarInfo.valid) {
         results.push({ row, status: 'error', error: 'KAMAR_NOT_FOUND' })
+        continue
+      }
+      // Sama seperti single-create (POST /) — sebelumnya cek ini hilang di jalur
+      // bulk, jadi bisa nyelipin santri putri ke kamar putra atau sebaliknya.
+      if (kamarInfo.jenisKelamin !== s.jenis_kelamin) {
+        results.push({ row, status: 'error', error: 'KAMAR_GENDER_MISMATCH' })
         continue
       }
     }
