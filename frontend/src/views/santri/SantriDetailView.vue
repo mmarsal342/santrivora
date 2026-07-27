@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { santriService, catatanService, kategoriService, catatanHaidService, catatanPerkembanganService } from '@/services'
 import { useAuthStore } from '@/stores/auth'
+import EmptyState from '@/components/EmptyState.vue'
 
 const auth = useAuthStore()
 
@@ -114,6 +115,25 @@ const sortedCatatan = computed(() => {
 
 const jumlahPelanggaran = computed(() => sortedCatatan.value.filter((c) => c.tipe === 'pelanggaran').length)
 const jumlahPrestasi = computed(() => sortedCatatan.value.filter((c) => c.tipe === 'prestasi').length)
+
+const pelanggaranByKategori = computed(() => {
+  const map = new Map<string, number>()
+  for (const c of sortedCatatan.value) {
+    if (c.tipe === 'pelanggaran') {
+      const key = c.kategori?.nama ?? c.kategori_nama ?? 'Lainnya'
+      map.set(key, (map.get(key) ?? 0) + 1)
+    }
+  }
+  const total = jumlahPelanggaran.value || 1
+  return Array.from(map.entries())
+    .map(([nama, jumlah]) => ({ nama, jumlah, persen: Math.round((jumlah / total) * 100) }))
+    .sort((a, b) => b.jumlah - a.jumlah)
+    .slice(0, 5)
+})
+
+const maxKategoriJumlah = computed(() =>
+  pelanggaranByKategori.value.reduce((max, k) => Math.max(max, k.jumlah), 0) || 1
+)
 
 const sortedCatatanHaid = computed(() =>
   [...catatanHaidList.value].sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''))
@@ -490,24 +510,37 @@ onMounted(() => {
           </button>
         </div>
 
-        <!-- Stat row -->
-        <div class="grid grid-cols-2 divide-x divide-slate-100 border-b border-slate-100">
-          <div class="px-5 py-3 text-center">
-            <p class="text-2xl font-bold text-rose-600">{{ jumlahPelanggaran }}</p>
-            <p class="text-xs font-medium text-slate-500">Pelanggaran</p>
+        <!-- Stat row / summary bar -->
+        <div class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-slate-100 border-b border-slate-100">
+          <div class="px-5 py-4 text-center md:text-left md:py-6">
+            <p class="text-3xl font-bold text-rose-600">{{ jumlahPelanggaran }}</p>
+            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mt-1">Pelanggaran Terdaftar</p>
           </div>
-          <div class="px-5 py-3 text-center">
-            <p class="text-2xl font-bold text-amber-600">{{ jumlahPrestasi }}</p>
-            <p class="text-xs font-medium text-slate-500">Prestasi</p>
+          <div class="px-5 py-4 text-center md:text-left md:py-6">
+            <p class="text-3xl font-bold text-amber-600">{{ jumlahPrestasi }}</p>
+            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mt-1">Prestasi Terdaftar</p>
+          </div>
+          <div class="px-5 py-4 md:py-6">
+            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 text-center md:text-left mb-2">Distribusi Pelanggaran</p>
+            <div v-if="pelanggaranByKategori.length" class="space-y-1.5">
+              <div v-for="kat in pelanggaranByKategori" :key="kat.nama" class="flex items-center gap-2">
+                <span class="text-xs font-medium text-slate-600 w-24 truncate" :title="kat.nama">{{ kat.nama }}</span>
+                <div class="flex-1 h-2 rounded bg-slate-100 overflow-hidden">
+                  <div class="h-full bg-rose-500 rounded" :style="{ width: (kat.jumlah / maxKategoriJumlah * 100) + '%' }"></div>
+                </div>
+                <span class="text-xs font-bold text-slate-500 w-6 text-right">{{ kat.jumlah }}×</span>
+              </div>
+            </div>
+            <p v-else class="text-xs text-slate-400 italic text-center md:text-left py-2">Belum ada pelanggaran</p>
           </div>
         </div>
 
         <!-- Timeline -->
         <div class="p-5">
-          <ol v-if="sortedCatatan.length" class="relative space-y-5 border-l-2 border-slate-100 pl-6">
+          <ol v-if="sortedCatatan.length" class="relative space-y-6 border-l-2 border-slate-100 pl-6">
             <li v-for="c in sortedCatatan" :key="c.id" class="relative">
               <span
-                class="absolute -left-[1.95rem] flex h-5 w-5 items-center justify-center rounded-full ring-4 ring-white"
+                class="absolute -left-[1.95rem] flex h-5 w-5 items-center justify-center rounded-full ring-4 ring-white shadow-xs"
                 :class="c.tipe === 'pelanggaran' ? 'bg-rose-500' : 'bg-amber-500'"
               >
                 <svg v-if="c.tipe === 'pelanggaran'" class="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
@@ -518,50 +551,47 @@ onMounted(() => {
                 </svg>
               </span>
 
-              <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs hover:border-slate-300 transition-colors">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <div class="flex flex-wrap items-center gap-2">
                     <span
-                      class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold"
-                      :class="c.tipe === 'pelanggaran' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'"
+                      class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset"
+                      :class="c.tipe === 'pelanggaran' ? 'bg-rose-50 text-rose-700 ring-rose-600/10' : 'bg-amber-50 text-amber-700 ring-amber-600/10'"
                     >{{ c.tipe === 'pelanggaran' ? 'Pelanggaran' : 'Prestasi' }}</span>
                     <span
                       v-if="c.kategori?.nama || c.kategori_nama"
-                      class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"
+                      class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600"
                     >{{ c.kategori?.nama ?? c.kategori_nama }}</span>
                     <span
                       v-if="c.jenis_prestasi"
-                      class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
+                      class="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-600/10"
                     >{{ c.jenis_prestasi }}</span>
                   </div>
                   <div class="flex items-center gap-2">
-                    <time class="text-xs text-slate-400">{{ formatDateShort(c.tanggal_kejadian) }}</time>
+                    <time class="text-xs text-slate-400 font-medium">{{ formatDate(c.tanggal_kejadian) }}</time>
                     <button
                       v-if="!auth.isReadOnly"
                       @click="removeCatatan(c.id)"
                       title="Hapus catatan"
-                      class="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      class="rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition"
                     >
-                      <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                       </svg>
                     </button>
                   </div>
                 </div>
-                <h3 class="mt-2 text-sm font-semibold text-slate-800">{{ c.judul }}</h3>
-                <p v-if="c.deskripsi" class="mt-1 text-sm text-slate-500">{{ c.deskripsi }}</p>
+                <h3 class="mt-2.5 text-sm font-bold text-slate-800">{{ c.judul }}</h3>
+                <p v-if="c.deskripsi" class="mt-1 text-sm text-slate-500 leading-relaxed">{{ c.deskripsi }}</p>
               </div>
             </li>
           </ol>
 
-          <div v-else class="py-10 text-center">
-            <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
-              <svg class="h-6 w-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-              </svg>
-            </div>
-            <p class="mt-3 text-sm text-slate-500">Belum ada catatan disiplin.</p>
-          </div>
+          <EmptyState
+            v-else
+            title="Belum ada catatan disiplin"
+            description="Pelanggaran atau prestasi yang dicatat akan muncul di sini."
+          />
         </div>
       </section>
 
@@ -591,51 +621,48 @@ onMounted(() => {
             <div v-for="i in 3" :key="i" class="h-16 animate-pulse rounded-lg bg-slate-100"></div>
           </div>
 
-          <ol v-else-if="sortedPerkembangan.length" class="relative space-y-5 border-l-2 border-slate-100 pl-6">
+          <ol v-else-if="sortedPerkembangan.length" class="relative space-y-6 border-l-2 border-slate-100 pl-6">
             <li v-for="c in sortedPerkembangan" :key="c.id" class="relative">
-              <span class="absolute -left-[1.95rem] flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 ring-4 ring-white">
+              <span class="absolute -left-[1.95rem] flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 ring-4 ring-white shadow-xs">
                 <svg class="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
               </span>
 
-              <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs hover:border-slate-300 transition-colors">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                   <div class="flex flex-wrap items-center gap-2">
                     <span
-                      class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold"
+                      class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset"
                       :class="kategoriPerkembanganStyle[c.kategori] || 'bg-slate-100 text-slate-600'"
                     >{{ c.kategori }}</span>
                   </div>
                   <div class="flex items-center gap-2">
-                    <time class="text-xs text-slate-400">{{ formatDateShort(c.tanggal) }}</time>
+                    <time class="text-xs text-slate-400 font-medium">{{ formatDateShort(c.tanggal) }}</time>
                     <button
                       v-if="!auth.isReadOnly"
                       @click="removePerkembangan(c.id)"
                       title="Hapus catatan"
-                      class="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      class="rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition"
                     >
-                      <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                       </svg>
                     </button>
                   </div>
                 </div>
-                <h3 class="mt-2 text-sm font-semibold text-slate-800">{{ c.judul }}</h3>
-                <p v-if="c.catatan" class="mt-1 text-sm text-slate-500">{{ c.catatan }}</p>
-                <p v-if="c.dicatat_oleh_nama" class="mt-1.5 text-xs text-slate-400">Dicatat oleh: {{ c.dicatat_oleh_nama }}</p>
+                <h3 class="mt-2.5 text-sm font-bold text-slate-800">{{ c.judul }}</h3>
+                <p v-if="c.catatan" class="mt-1 text-sm text-slate-500 leading-relaxed">{{ c.catatan }}</p>
+                <p v-if="c.dicatat_oleh_nama" class="mt-2 text-xs text-slate-400 italic">— {{ c.dicatat_oleh_nama }}</p>
               </div>
             </li>
           </ol>
 
-          <div v-else class="py-10 text-center">
-            <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
-              <svg class="h-6 w-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-            </div>
-            <p class="mt-3 text-sm text-slate-500">Belum ada catatan perkembangan.</p>
-          </div>
+          <EmptyState
+            v-else
+            title="Belum ada catatan perkembangan"
+            description="Catatan perkembangan santri akan muncul di sini."
+          />
         </div>
       </section>
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { kamarService } from '@/services'
+import EmptyState from '@/components/EmptyState.vue'
 
 interface Kamar {
   id: string
@@ -136,15 +137,13 @@ onMounted(fetchList)
       <div v-for="i in 4" :key="i" class="h-14 animate-pulse rounded-lg bg-gray-100"></div>
     </div>
 
-    <div
+    <EmptyState
       v-else-if="list.length === 0"
-      class="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white py-16 text-center"
-    >
-      <svg class="mb-3 h-12 w-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.5c0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75V15a.75.75 0 01.75-.75h3a.75.75 0 01.75.75v5.25c0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75V9.75" />
-      </svg>
-      <p class="text-sm font-medium text-gray-600">Belum ada kamar</p>
-    </div>
+      title="Belum ada kamar"
+      description="Tambahkan kamar untuk asrama putra maupun putri."
+      action-label="+ Tambah Kamar"
+      @action="openCreate"
+    />
 
     <div v-else class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
       <div class="overflow-x-auto">

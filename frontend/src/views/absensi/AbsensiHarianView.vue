@@ -26,11 +26,13 @@ interface SantriRow {
 
 type AbsensiStatus = 'hadir' | 'sakit' | 'izin' | 'alpa'
 
-const statusOptions: Array<{ value: AbsensiStatus; label: string; activeClass: string }> = [
-  { value: 'hadir', label: 'Hadir', activeClass: 'border-emerald-500 bg-emerald-50 text-emerald-700' },
-  { value: 'sakit', label: 'Sakit', activeClass: 'border-amber-500 bg-amber-50 text-amber-700' },
-  { value: 'izin', label: 'Izin', activeClass: 'border-sky-500 bg-sky-50 text-sky-700' },
-  { value: 'alpa', label: 'Alpa', activeClass: 'border-rose-500 bg-rose-50 text-rose-700' },
+import EmptyState from '@/components/EmptyState.vue'
+
+const statusOptions: Array<{ value: AbsensiStatus; label: string; short: string; activeClass: string; dot: string }> = [
+  { value: 'hadir', label: 'Hadir', short: 'H', activeClass: 'border-emerald-500 bg-emerald-50 text-emerald-700 ring-emerald-500/20', dot: 'bg-emerald-500' },
+  { value: 'sakit', label: 'Sakit', short: 'S', activeClass: 'border-amber-500 bg-amber-50 text-amber-700 ring-amber-500/20', dot: 'bg-amber-500' },
+  { value: 'izin', label: 'Izin', short: 'I', activeClass: 'border-sky-500 bg-sky-50 text-sky-700 ring-sky-500/20', dot: 'bg-sky-500' },
+  { value: 'alpa', label: 'Alpa', short: 'A', activeClass: 'border-rose-500 bg-rose-50 text-rose-700 ring-rose-500/20', dot: 'bg-rose-500' },
 ]
 
 const auth = useAuthStore()
@@ -228,13 +230,11 @@ onMounted(loadKamar)
     </div>
 
     <!-- No kamar assigned -->
-    <div
+    <EmptyState
       v-if="!loadingKamar && kamarList.length === 0"
-      class="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center"
-    >
-      <p class="text-sm font-medium text-slate-600">Anda belum ditugaskan sebagai wali kamar manapun.</p>
-      <p class="mt-1 text-sm text-slate-400">Hubungi admin untuk assignment kamar.</p>
-    </div>
+      title="Anda belum ditugaskan sebagai wali kamar"
+      description="Hubungi admin untuk assignment kamar."
+    />
 
     <template v-else-if="selectedKamar">
       <!-- Error / success -->
@@ -267,7 +267,7 @@ onMounted(loadKamar)
         <div
           v-for="s in santriRows"
           :key="s.id"
-          class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+          class="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs transition hover:shadow-sm sm:p-4"
         >
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="flex items-center gap-3">
@@ -276,31 +276,39 @@ onMounted(loadKamar)
               </div>
               <span class="font-medium text-slate-800">{{ s.nama_lengkap }}</span>
             </div>
-            <div class="grid grid-cols-4 gap-1.5">
+            <div class="flex gap-1.5">
               <button
                 v-for="opt in statusOptions"
                 :key="opt.value"
                 type="button"
                 @click="s.status = opt.value"
-                class="rounded-lg border px-3 py-1.5 text-xs font-semibold transition"
-                :class="s.status === opt.value ? opt.activeClass : 'border-slate-200 text-slate-500 hover:bg-slate-50'"
-              >{{ opt.label }}</button>
+                :title="opt.label"
+                class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition sm:px-3"
+                :class="s.status === opt.value ? opt.activeClass + ' ring-1' : 'border-slate-200 text-slate-500 hover:bg-slate-50'"
+              >
+                <span class="h-1.5 w-1.5 rounded-full" :class="opt.dot"></span>
+                <span class="hidden sm:inline">{{ opt.label }}</span>
+                <span class="sm:hidden">{{ opt.short }}</span>
+              </button>
             </div>
           </div>
-          <div v-if="s.status !== 'hadir'" class="mt-2">
+          <div v-if="s.status !== 'hadir'" class="mt-2.5 grid-cols-1 gap-2 sm:grid-cols-[auto_1fr] sm:flex sm:items-center">
+            <span class="text-xs font-medium text-slate-400 sm:w-20">Keterangan</span>
             <input
               v-model="s.keterangan"
               type="text"
-              placeholder="Keterangan (opsional)..."
+              placeholder="Keterangan tambahan (opsional)..."
               class="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
             />
           </div>
         </div>
       </div>
 
-      <div v-else class="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center">
-        <p class="text-sm text-slate-500">Belum ada santri aktif di kamar ini.</p>
-      </div>
+      <EmptyState
+        v-else
+        title="Belum ada santri aktif di kamar ini"
+        description="Tambahkan santri terlebih dahulu untuk melakukan absensi."
+      />
 
       <!-- Submit -->
       <div v-if="santriRows.length" class="sticky bottom-4 flex justify-end">
