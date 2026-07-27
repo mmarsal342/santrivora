@@ -249,8 +249,12 @@ dashboard.get('/per-wali-kamar', dashboardRead, async (c) => {
 
     const stats = await computeKamarStats(c.env, kamarIds, dari, sampai)
 
+    // catatanHaid.ts (assertHaidAccess) eksplisit blokir kyai dari data haid
+    // (data sensitif) walau kyai global-read di tempat lain — dashboard ini
+    // sebelumnya gak ikut aturan itu. Skip query-nya sama sekali buat kyai,
+    // bukan cuma sembunyikan hasilnya.
     let catatanHaidTercatat: number | null = null
-    const kamarPutriIds = kamarRows.filter((k) => k.jenis_kelamin === 'P').map((k) => k.id)
+    const kamarPutriIds = user.role === 'kyai' ? [] : kamarRows.filter((k) => k.jenis_kelamin === 'P').map((k) => k.id)
     if (kamarPutriIds.length > 0) {
       const ph = kamarPutriIds.map(() => '?').join(',')
       const haidCount = await c.env.DB.prepare(`
