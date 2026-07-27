@@ -291,6 +291,32 @@ export const dashboardService = {
   }
 }
 
+export const personelService = {
+  async list(params?: { role?: string; status?: string; page?: number; limit?: number }) {
+    const response = await api.get('/personel', { params })
+    return response.data
+  },
+  async get(id: string) {
+    const response = await api.get(`/personel/${id}`)
+    return response.data.data
+  },
+  async listCatatan(id: string) {
+    const response = await api.get(`/personel/${id}/catatan`)
+    return response.data.data
+  },
+  async createCatatan(id: string, data: { tanggal: string; kategori: string; judul: string; catatan?: string }) {
+    const response = await api.post(`/personel/${id}/catatan`, data)
+    return response.data.data
+  },
+  async updateCatatan(catatanId: string, data: Record<string, unknown>) {
+    const response = await api.put(`/personel/catatan/${catatanId}`, data)
+    return response.data.data
+  },
+  async removeCatatan(catatanId: string) {
+    await api.delete(`/personel/catatan/${catatanId}`)
+  }
+}
+
 export const pesanService = {
   async send(data: { judul: string; isi: string; prioritas?: 'biasa' | 'penting'; penerima_id?: string; asrama_jenis?: 'L' | 'P' }) {
     const response = await api.post('/pesan', data)
