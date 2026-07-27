@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import { generateTokens, hashPassword, verifyPassword, verifyRefreshToken, verifyAccessToken, validatePasswordStrength } from '../services/auth'
-import { authMiddleware } from '../middleware/auth'
+import { authMiddleware, invalidateUserAccessTokens } from '../middleware/auth'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const auth = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -467,6 +467,18 @@ auth.post('/change-password', authMiddleware, zValidator('json', changePasswordS
   await c.env.DB.prepare(
     'UPDATE sessions SET is_revoked = 1 WHERE user_id = ?'
   ).bind(userPayload.sub).run()
+
+  // Blacklist di atas cuma nutup jti dari REQUEST INI (device yang lagi dipakai).
+  // Access token yang masih hidup di device LAIN (jti berbeda) tetap jalan normal
+  // sampai sisa TTL-nya (≤15 menit) — persis skenario "akun kecolongan, buru-buru
+  // ganti password" yang justru paling butuh langsung diputus. Tutup itu juga lewat
+  // cutoff per-user, TAPI dengan cutoffSecOverride = detik-ini MINUS 1: fungsi ini
+  // langsung mint token baru untuk device ini sendiri (di bawah), dan tanpa offset
+  // itu, token baru itu (iat = detik-ini) akan langsung ke-block juga oleh
+  // pengecekan inklusif `iat <= cutoff` di authMiddleware — override ini yang
+  // mencegah self-lockout tersebut sekaligus tetap menolak semua token lama.
+  const cutoffSec = Math.floor(Date.now() / 1000) - 1
+  await invalidateUserAccessTokens(c.env, userPayload.sub, cutoffSec)
 
   // Generate new tokens + a fresh session for this device — use FRESH data from DB
   let kelasIds: string[] = []
