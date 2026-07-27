@@ -12,16 +12,18 @@ not_found_handling = "single-page-application"
 [build]
 command = "cd frontend && npm run build"
 
-# Development environment (default / local)
+# Development environment (default / local) — D1 + KV terpisah dari
+# staging/production (dulu ketiganya share resource yang sama persis, lihat
+# audit MEDIUM #7).
 [[d1_databases]]
 binding = "DB"
-database_name = "santrivora-db"
-database_id = "606a3c63-02e2-44f5-a3f3-b7f069df7499"
+database_name = "santrivora-db-dev"
+database_id = "20f10412-42ac-4c48-b5a9-7e412a3ba935"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "dce5e0ce216547beb570865b4f2bdb53"
-preview_id = "dcfcf5f8604249bdb2201c99b0002278"
+id = "172f4c5d0aaa4a44a962df5ff516dca4"
+preview_id = "172f4c5d0aaa4a44a962df5ff516dca4"
 
 [[r2_buckets]]
 binding = "R2"
@@ -47,8 +49,8 @@ database_id = "9a916970-7831-458b-b864-87ee117109b1"
 
 [[env.staging.kv_namespaces]]
 binding = "KV"
-id = "dce5e0ce216547beb570865b4f2bdb53"
-preview_id = "dcfcf5f8604249bdb2201c99b0002278"
+id = "542965c01cd24f3891c27c73f65587ae"
+preview_id = "542965c01cd24f3891c27c73f65587ae"
 
 [[env.staging.r2_buckets]]
 binding = "R2"
