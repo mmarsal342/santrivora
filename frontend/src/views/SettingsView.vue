@@ -51,7 +51,14 @@ const strengthTextClass = computed(() => {
   if (s === 4) return 'text-lime-600'
   return 'text-emerald-600'
 })
-const passwordErrors = computed(() => strengthScore.value < 5 && form.new_password.length > 0 ? [passwordRules[strengthScore.value].label] : [])
+// `strengthScore` cuma JUMLAH rule yang lolos — bukan index rule yang gagal.
+// Filter rule yang benar-benar gagal, jangan pakai strengthScore sebagai index
+// (itu bisa nunjuk ke rule yang justru sudah lolos, pesan error jadi salah).
+const passwordErrors = computed(() =>
+  form.new_password.length > 0
+    ? passwordRules.filter((r) => !r.test(form.new_password)).map((r) => r.label)
+    : []
+)
 
 function avatarColor(nama: string): string {
   const colors = [
