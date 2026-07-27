@@ -9,16 +9,15 @@
 -- token_blacklist, audit_log). Dire-enable di akhir. Referensi by-name tetap
 -- valid setelah rename karena strukturnya identik.
 --
--- PRAGMA foreign_keys HARUS di luar transaksi (SQLite tidak mengizinkan pragma
--- ini diubah di dalam transaksi terbuka) — makanya BEGIN/COMMIT membungkus
--- seluruh blok DDL di bawah, DI ANTARA dua PRAGMA ini, bukan menyelimutinya.
--- Tanpa transaksi eksplisit, `wrangler d1 execute --file=` tidak menjamin
--- batch statement ini jalan atomik: kalau proses keputus tepat di antara
--- `DROP TABLE users` dan `RENAME`, database bisa kehilangan tabel `users`
--- sama sekali (lockout total, harus dibenarkan manual).
+-- CATATAN (koreksi dari percobaan sebelumnya): JANGAN tambahkan statement
+-- transaksi SQL manual (mulai/akhiri transaksi secara eksplisit) di sekitar
+-- blok ini — Cloudflare D1 menolak statement semacam itu sama sekali kalau
+-- dijalankan lewat `wrangler d1 execute --remote --file=`, dan bahkan cuma
+-- MENYEBUT kata kuncinya di komentar pun bikin parser migrasi vitest-pool-
+-- workers salah deteksi ("contains several transactions"). D1 sudah atomik
+-- otomatis untuk satu file/batch yang dieksekusi, jadi itu emang gak perlu
+-- ditambahin sendiri di level SQL.
 PRAGMA foreign_keys = OFF;
-
-BEGIN TRANSACTION;
 
 -- 1. Rebuild users table: perluas CHECK role + tambah kolom asrama_jenis.
 --    SQLite tidak bisa ALTER constraint, jadi rebuild tabel (FK referensi
@@ -72,8 +71,6 @@ CREATE TABLE IF NOT EXISTS pesan_dibaca (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pesan_dibaca_user ON pesan_dibaca(user_id);
-
-COMMIT;
 
 -- Re-enable FK enforcement
 PRAGMA foreign_keys = ON;
