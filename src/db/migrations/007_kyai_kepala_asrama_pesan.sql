@@ -8,7 +8,17 @@
 -- Nonaktifkan FK enforcement selama rebuild users (ada FK incoming dari sessions,
 -- token_blacklist, audit_log). Dire-enable di akhir. Referensi by-name tetap
 -- valid setelah rename karena strukturnya identik.
+--
+-- PRAGMA foreign_keys HARUS di luar transaksi (SQLite tidak mengizinkan pragma
+-- ini diubah di dalam transaksi terbuka) — makanya BEGIN/COMMIT membungkus
+-- seluruh blok DDL di bawah, DI ANTARA dua PRAGMA ini, bukan menyelimutinya.
+-- Tanpa transaksi eksplisit, `wrangler d1 execute --file=` tidak menjamin
+-- batch statement ini jalan atomik: kalau proses keputus tepat di antara
+-- `DROP TABLE users` dan `RENAME`, database bisa kehilangan tabel `users`
+-- sama sekali (lockout total, harus dibenarkan manual).
 PRAGMA foreign_keys = OFF;
+
+BEGIN TRANSACTION;
 
 -- 1. Rebuild users table: perluas CHECK role + tambah kolom asrama_jenis.
 --    SQLite tidak bisa ALTER constraint, jadi rebuild tabel (FK referensi
@@ -62,6 +72,8 @@ CREATE TABLE IF NOT EXISTS pesan_dibaca (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pesan_dibaca_user ON pesan_dibaca(user_id);
+
+COMMIT;
 
 -- Re-enable FK enforcement
 PRAGMA foreign_keys = ON;
