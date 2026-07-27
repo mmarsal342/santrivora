@@ -51,10 +51,11 @@ export async function seedSantri(overrides: Partial<{
 }
 
 interface SeedUserOptions {
-  role?: 'admin' | 'ustadz'
+  role?: 'admin' | 'ustadz' | 'kyai' | 'kepala_asrama'
   kelas_ids?: string[]
   kamar_ids?: string[]
   status?: 'pending' | 'approved' | 'suspended'
+  asrama_jenis?: 'L' | 'P'
 }
 
 // Bikin user + (kalau ustadz) isi ustadz_kelas/ustadz_kamar, lalu mint access
@@ -66,12 +67,13 @@ export async function seedUser(opts: SeedUserOptions = {}) {
   const status = opts.status ?? 'approved'
   const kelasIds = opts.kelas_ids ?? []
   const kamarIds = opts.kamar_ids ?? []
+  const asramaJenis = role === 'kepala_asrama' ? (opts.asrama_jenis ?? 'L') : null
   const email = `${id}@test.local`
 
   await testEnv().DB.prepare(
-    `INSERT INTO users (id, email, password_hash, nama_lengkap, role, status)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(id, email, await hashPassword('Test1234!'), `Test User ${id.slice(0, 6)}`, role, status).run()
+    `INSERT INTO users (id, email, password_hash, nama_lengkap, role, asrama_jenis, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, email, await hashPassword('Test1234!'), `Test User ${id.slice(0, 6)}`, role, asramaJenis, status).run()
 
   for (const kelasId of kelasIds) {
     await testEnv().DB.prepare(
@@ -90,10 +92,11 @@ export async function seedUser(opts: SeedUserOptions = {}) {
     role,
     kelasIds,
     { access: testEnv().JWT_ACCESS_SECRET, refresh: testEnv().JWT_REFRESH_SECRET },
-    kamarIds
+    kamarIds,
+    asramaJenis
   )
 
-  return { id, email, role, kelasIds, kamarIds, accessToken: tokens.access_token }
+  return { id, email, role, kelasIds, kamarIds, asramaJenis, accessToken: tokens.access_token }
 }
 
 export function authHeaders(token: string): Record<string, string> {
