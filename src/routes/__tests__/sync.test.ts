@@ -195,3 +195,205 @@ describe('sync.ts — catatan_disiplin conflict tersimpan ke sync_conflicts (aud
     expect(stored?.status).toBe('pending')
   })
 })
+
+// Ditemukan saat re-check fix di atas (bukan temuan audit awal): validasi kategori_id
+// yang baru ditambahkan cek `item.data.tipe` (dari client), padahal `tipe` bukan field
+// yang bisa diupdate — jadi klien yang cukup tidak mengirim `tipe` (kasus normal:
+// cuma kirim field yang berubah) melewati validasi sepenuhnya walau baris di DB-nya
+// tetap tipe='pelanggaran'.
+describe('sync.ts — kategori_id di update catatan_disiplin divalidasi dari tipe DB, bukan dari client', () => {
+  it('update kategori_id ke ID acak ditolak walau item.data TIDAK menyertakan field tipe', async () => {
+    const kamar = await seedKamar()
+    const santriId = await seedSantri({ kamar_id: kamar })
+    const ustadz = await seedUser({ role: 'ustadz', kamar_ids: [kamar] })
+
+    const catatanId = uuid()
+    await testEnv().DB.prepare(
+      `INSERT INTO catatan_disiplin (id, santri_id, tipe, judul, tanggal_kejadian, dicatat_oleh, version)
+       VALUES (?, ?, 'pelanggaran', 'Judul awal', '2026-01-01', ?, 1)`
+    ).bind(catatanId, santriId, ustadz.id).run()
+
+    const res = await syncRoutes.request('/', {
+      method: 'POST',
+      headers: authHeaders(ustadz.accessToken),
+      body: JSON.stringify({
+        items: [{
+          entity_type: 'catatan_disiplin',
+          local_id: 'l1',
+          action: 'update',
+          version: 1,
+          data: { id: catatanId, kategori_id: uuid() } // tipe TIDAK disertakan, seperti klien normal
+        }]
+      })
+    }, testEnv())
+
+    const body = await res.json() as { results: Array<{ status: string; error?: string }> }
+    expect(body.results[0].status).toBe('error')
+    expect(body.results[0].error).toBe('KATEGORI_NOT_FOUND')
+
+    const row = await testEnv().DB.prepare('SELECT kategori_id FROM catatan_disiplin WHERE id = ?').bind(catatanId).first<{ kategori_id: string | null }>()
+    expect(row?.kategori_id).toBeNull()
+  })
+
+  it('update kategori_id yang valid tetap berhasil', async () => {
+    const kamar = await seedKamar()
+    const santriId = await seedSantri({ kamar_id: kamar })
+    const ustadz = await seedUser({ role: 'ustadz', kamar_ids: [kamar] })
+
+    const kategoriId = uuid()
+    await testEnv().DB.prepare(
+      "INSERT INTO kategori_pelanggaran (id, nama) VALUES (?, 'Terlambat')"
+    ).bind(kategoriId).run()
+
+    const catatanId = uuid()
+    await testEnv().DB.prepare(
+      `INSERT INTO catatan_disiplin (id, santri_id, tipe, judul, tanggal_kejadian, dicatat_oleh, version)
+       VALUES (?, ?, 'pelanggaran', 'Judul awal', '2026-01-01', ?, 1)`
+    ).bind(catatanId, santriId, ustadz.id).run()
+
+    const res = await syncRoutes.request('/', {
+      method: 'POST',
+      headers: authHeaders(ustadz.accessToken),
+      body: JSON.stringify({
+        items: [{ entity_type: 'catatan_disiplin', local_id: 'l1', action: 'update', version: 1, data: { id: catatanId, kategori_id: kategoriId } }]
+      })
+    }, testEnv())
+
+    const body = await res.json() as { results: Array<{ status: string }> }
+    expect(body.results[0].status).toBe('synced')
+  })
+})
+
+// Ditemukan saat re-check: cabang "race" yang baru ditambahkan (persist conflict saat
+// UPDATE ... WHERE version = ? kena 0 rows) ternyata juga kena kalau klien kirim
+// version yang LEBIH BESAR dari version server (bukan cuma race asli) — itu bisa
+// dipakai flood tabel sync_conflicts dengan conflict palsu berkali-kali dari request
+// yang sama-sama valid secara scope.
+describe('sync.ts — version yang mustahil (lebih besar dari server) ditolak, bukan bikin conflict', () => {
+  it('push dengan version > version server ditolak error INVALID_VERSION, tidak menambah sync_conflicts', async () => {
+    const kamar = await seedKamar()
+    const santriId = await seedSantri({ kamar_id: kamar })
+    const ustadz = await seedUser({ role: 'ustadz', kamar_ids: [kamar] })
+
+    for (let i = 0; i < 3; i++) {
+      const res = await syncRoutes.request('/', {
+        method: 'POST',
+        headers: authHeaders(ustadz.accessToken),
+        body: JSON.stringify({
+          items: [{ entity_type: 'santri', local_id: `l${i}`, action: 'update', version: 999, data: { id: santriId, nama_lengkap: 'X' } }]
+        })
+      }, testEnv())
+      const body = await res.json() as { results: Array<{ status: string; error?: string }> }
+      expect(body.results[0].status).toBe('error')
+      expect(body.results[0].error).toBe('INVALID_VERSION')
+    }
+
+    const conflicts = await testEnv().DB.prepare(
+      'SELECT COUNT(*) as n FROM sync_conflicts WHERE entity_id = ?'
+    ).bind(santriId).first<{ n: number }>()
+    expect(conflicts?.n).toBe(0)
+  })
+})
+
+// Ditemukan saat re-check: validasi kelas/kamar yang ditambahkan sebelumnya berjalan
+// unconditional terhadap NILAI EFEKTIF (fallback ke current kalau tidak diubah), jadi
+// begitu kamar/kelas yang ditempati seorang santri dinonaktifkan, SEMUA edit lain ke
+// santri itu (bahkan yang tidak menyentuh kamar/kelas sama sekali) ikut ditolak — dan
+// conflict yang sudah ada jadi tidak bisa diresolve sama sekali, termasuk 'use_server'
+// yang seharusnya no-op.
+describe('sync.ts — edit yang tidak menyentuh kamar/kelas tidak boleh diblokir gara-gara kamar/kelas itu belakangan dinonaktifkan', () => {
+  it('push update nama_lengkap tetap berhasil walau kamar santri sudah dinonaktifkan', async () => {
+    const kamar = await seedKamar()
+    const santriId = await seedSantri({ kamar_id: kamar })
+    const admin = await seedUser({ role: 'admin' })
+
+    await testEnv().DB.prepare('UPDATE kamar SET is_active = 0 WHERE id = ?').bind(kamar).run()
+
+    const res = await syncRoutes.request('/', {
+      method: 'POST',
+      headers: authHeaders(admin.accessToken),
+      body: JSON.stringify({
+        items: [{ entity_type: 'santri', local_id: 'l1', action: 'update', version: 1, data: { id: santriId, nama_lengkap: 'Nama Baru' } }]
+      })
+    }, testEnv())
+
+    const body = await res.json() as { results: Array<{ status: string; error?: string }> }
+    expect(body.results[0].status).toBe('synced')
+  })
+
+  it("resolve 'use_server' (no-op) tetap berhasil walau kamar santri sudah dinonaktifkan", async () => {
+    const kamar = await seedKamar()
+    const santriId = await seedSantri({ kamar_id: kamar })
+    const admin = await seedUser({ role: 'admin' })
+
+    // Bikin conflict yang sah dulu (sebelum kamar dinonaktifkan).
+    const pushRes = await syncRoutes.request('/', {
+      method: 'POST',
+      headers: authHeaders(admin.accessToken),
+      body: JSON.stringify({
+        items: [{ entity_type: 'santri', local_id: 'l1', action: 'update', version: 0, data: { id: santriId, nama_lengkap: 'X' } }]
+      })
+    }, testEnv())
+    const pushBody = await pushRes.json() as { results: Array<{ status: string }> }
+    expect(pushBody.results[0].status).toBe('conflict')
+
+    await testEnv().DB.prepare('UPDATE kamar SET is_active = 0 WHERE id = ?').bind(kamar).run()
+
+    const conflict = await testEnv().DB.prepare(
+      "SELECT id FROM sync_conflicts WHERE entity_id = ? AND status = 'pending'"
+    ).bind(santriId).first<{ id: string }>()
+
+    const resolveRes = await syncRoutes.request(`/conflicts/${conflict!.id}/resolve`, {
+      method: 'POST',
+      headers: authHeaders(admin.accessToken),
+      body: JSON.stringify({ resolution: 'use_server' })
+    }, testEnv())
+
+    expect(resolveRes.status).toBe(200)
+  })
+})
+
+// Ditemukan saat re-check: apply resolve nge-SET version = server_version + 1 secara
+// absolut tanpa guard WHERE version — kalau baris sudah maju lagi setelah conflict
+// tercatat, angka version bisa MUNDUR dan optimistic-locking jadi rusak.
+describe('sync.ts — resolve conflict tidak boleh mundurin version kalau row sudah berubah lagi', () => {
+  it('resolve santri conflict yang sudah stale (row berubah lagi setelah conflict tercatat) ditolak 409, tidak menimpa data', async () => {
+    const kamar = await seedKamar()
+    const santriId = await seedSantri({ kamar_id: kamar, nama_lengkap: 'Awal' })
+    const admin = await seedUser({ role: 'admin' })
+
+    const pushRes = await syncRoutes.request('/', {
+      method: 'POST',
+      headers: authHeaders(admin.accessToken),
+      body: JSON.stringify({
+        items: [{ entity_type: 'santri', local_id: 'l1', action: 'update', version: 0, data: { id: santriId, nama_lengkap: 'Dari client' } }]
+      })
+    }, testEnv())
+    const pushBody = await pushRes.json() as { results: Array<{ status: string }> }
+    expect(pushBody.results[0].status).toBe('conflict')
+
+    const conflict = await testEnv().DB.prepare(
+      "SELECT id, server_version FROM sync_conflicts WHERE entity_id = ? AND status = 'pending'"
+    ).bind(santriId).first<{ id: string; server_version: number }>()
+    expect(conflict).toBeTruthy()
+
+    // Row maju lagi (edit lain, di luar flow resolve ini) setelah conflict tercatat.
+    await testEnv().DB.prepare(
+      "UPDATE santri SET nama_lengkap = 'Edit belakangan', version = version + 1, updated_at = datetime('now') WHERE id = ?"
+    ).bind(santriId).run()
+    const advanced = await testEnv().DB.prepare('SELECT version FROM santri WHERE id = ?').bind(santriId).first<{ version: number }>()
+    expect(advanced!.version).toBeGreaterThan(conflict!.server_version)
+
+    const resolveRes = await syncRoutes.request(`/conflicts/${conflict!.id}/resolve`, {
+      method: 'POST',
+      headers: authHeaders(admin.accessToken),
+      body: JSON.stringify({ resolution: 'use_server' })
+    }, testEnv())
+
+    expect(resolveRes.status).toBe(409)
+
+    const row = await testEnv().DB.prepare('SELECT nama_lengkap, version FROM santri WHERE id = ?').bind(santriId).first<{ nama_lengkap: string; version: number }>()
+    expect(row?.nama_lengkap).toBe('Edit belakangan')
+    expect(row?.version).toBe(advanced!.version)
+  })
+})

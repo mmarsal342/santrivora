@@ -44,7 +44,8 @@ export const authMiddleware = async (c: Context<{ Bindings: Env; Variables: { us
   // yang terbit di detik cutoff atau sebelumnya ditolak; token dari detik SETELAHNYA
   // (hasil re-login) tetap valid. Lihat komentar di invalidateUserAccessTokens.
   const revokeBefore = await c.env.KV.get(`revoke_before:${payload.sub}`)
-  if (revokeBefore && payload.iat <= parseInt(revokeBefore, 10)) {
+  const revokeBeforeSec = revokeBefore ? parseInt(revokeBefore, 10) : NaN
+  if (Number.isFinite(revokeBeforeSec) && payload.iat <= revokeBeforeSec) {
     return c.json({
       error: 'Unauthorized',
       code: 'TOKEN_REVOKED',

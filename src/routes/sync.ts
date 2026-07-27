@@ -89,6 +89,47 @@ async function validateSantriRefs(
   return null
 }
 
+/**
+ * Sama seperti validateSantriRefs, tapi untuk update PARSIAL (sync push update,
+ * atau conflict resolve) — HANYA re-validasi existence+is_active untuk field yang
+ * NILAINYA benar-benar berubah dari current row (bukan cuma "field-nya ada di
+ * payload" — 'use_server' pada resolve mengirim snapshot penuh termasuk kelas_id/
+ * kamar_id yang sama sekali tidak berubah). Kalau tidak dibatasi begini, kamar/
+ * kelas yang belakangan dinonaktifkan admin bisa mem-brick SEMUA edit lain ke
+ * santri yang masih menempati kamar/kelas itu — termasuk conflict yang jadi tidak
+ * bisa diresolve sama sekali, bahkan dengan 'use_server' yang seharusnya no-op.
+ * Gender tetap di-cross-check kalau salah satu dari kamar_id/jenis_kelamin berubah
+ * (tanpa mensyaratkan kamar masih is_active kalau cuma jenis_kelamin yang berubah).
+ */
+async function validatePartialSantriRefs(
+  env: Env,
+  current: { kelas_id: string | null; kamar_id: string | null; jenis_kelamin: 'L' | 'P' },
+  patch: { kelas_id?: string | null; kamar_id?: string | null; jenis_kelamin?: 'L' | 'P' }
+): Promise<string | null> {
+  const kelasChanging = patch.kelas_id !== undefined && patch.kelas_id !== current.kelas_id
+  const kamarChanging = patch.kamar_id !== undefined && patch.kamar_id !== current.kamar_id
+  const jenisChanging = patch.jenis_kelamin !== undefined && patch.jenis_kelamin !== current.jenis_kelamin
+
+  const newKelasId = patch.kelas_id !== undefined ? patch.kelas_id : current.kelas_id
+  const newKamarId = patch.kamar_id !== undefined ? patch.kamar_id : current.kamar_id
+  const newJenisKelamin = patch.jenis_kelamin !== undefined ? patch.jenis_kelamin : current.jenis_kelamin
+
+  if (kelasChanging && newKelasId) {
+    const kelas = await env.DB.prepare('SELECT id FROM kelas WHERE id = ? AND is_active = 1').bind(newKelasId).first()
+    if (!kelas) return 'KELAS_NOT_FOUND'
+  }
+
+  if (newKamarId && (kamarChanging || jenisChanging)) {
+    const kamar = kamarChanging
+      ? await env.DB.prepare('SELECT id, jenis_kelamin FROM kamar WHERE id = ? AND is_active = 1').bind(newKamarId).first<{ jenis_kelamin: string }>()
+      : await env.DB.prepare('SELECT jenis_kelamin FROM kamar WHERE id = ?').bind(newKamarId).first<{ jenis_kelamin: string }>()
+    if (kamarChanging && !kamar) return 'KAMAR_NOT_FOUND'
+    if (kamar && kamar.jenis_kelamin !== newJenisKelamin) return 'KAMAR_GENDER_MISMATCH'
+  }
+
+  return null
+}
+
 async function checkCatatanScopeAccess(env: Env, user: UserPayload, santriId: string): Promise<{ ok: boolean; santri?: { kelas_id: string | null; kamar_id: string | null; status: string } }> {
   const santri = await env.DB.prepare(
     'SELECT kelas_id, kamar_id, status FROM santri WHERE id = ?'
@@ -350,29 +391,46 @@ sync.post('/conflicts/:id/resolve', requireCanMutate(), async (c) => {
         // ('use_client' ataupun 'manual_merge') diterapkan mentah tanpa validasi
         // scope/gender/keberadaan kelas-kamar — jadi bisa dipakai bypass otorisasi
         // yang selalu ditegakkan di jalur create/update biasa. Sekarang divalidasi
-        // dengan aturan yang sama.
-        const merged = Object.fromEntries(updateFields) as Record<string, unknown>
-        const effectiveKelasId = (merged.kelas_id !== undefined ? merged.kelas_id : current.kelas_id) as string | null
-        const effectiveKamarId = (merged.kamar_id !== undefined ? merged.kamar_id : current.kamar_id) as string | null
-        const effectiveJenisKelamin = (merged.jenis_kelamin !== undefined ? merged.jenis_kelamin : current.jenis_kelamin) as 'L' | 'P'
+        // dengan aturan yang sama. Pakai validatePartialSantriRefs (bukan versi
+        // unconditional) — 'use_server' mengirim snapshot PENUH termasuk kelas_id/
+        // kamar_id yang sama sekali tidak berubah; kalau divalidasi unconditional,
+        // resolve yang seharusnya no-op bisa gagal kalau kamar/kelas itu belakangan
+        // dinonaktifkan, dan conflict-nya jadi tidak bisa diresolve selamanya.
+        const merged = Object.fromEntries(updateFields) as { kelas_id?: string | null; kamar_id?: string | null; jenis_kelamin?: 'L' | 'P' }
 
         if (!(await checkSantriScopeAccess(c.env, user, current))) {
           return c.json({ error: 'Forbidden', code: 'SANTRI_NOT_ACCESSIBLE', message: 'Anda tidak memiliki akses ke santri ini.' } as ApiError, 403)
         }
+        const effectiveKelasId = merged.kelas_id !== undefined ? merged.kelas_id : current.kelas_id
+        const effectiveKamarId = merged.kamar_id !== undefined ? merged.kamar_id : current.kamar_id
         const targetScopeErr = await checkSantriTargetScope(c.env, user, effectiveKelasId, effectiveKamarId)
         if (targetScopeErr) {
           return c.json({ error: 'Forbidden', code: targetScopeErr, message: 'Kelas/kamar hasil resolve di luar scope Anda.' } as ApiError, 403)
         }
-        const refErr = await validateSantriRefs(c.env, effectiveKelasId, effectiveKamarId, effectiveJenisKelamin)
+        const refErr = await validatePartialSantriRefs(c.env, current, merged)
         if (refErr) {
           return c.json({ error: 'Bad Request', code: refErr, message: 'Kelas/kamar hasil resolve tidak valid.' } as ApiError, 400)
         }
 
         const sets = updateFields.map(([k]) => `${k} = ?`).join(', ')
         const vals = updateFields.map(([, v]) => v)
-        await c.env.DB.prepare(
-          `UPDATE santri SET ${sets}, version = ?, updated_at = datetime('now') WHERE id = ?`
-        ).bind(...vals, conflict.server_version + 1, conflict.entity_id).run()
+        // version = version + 1 dengan guard WHERE version = <server_version yang
+        // tercatat saat conflict dibuat> — bukan SET version = server_version + 1
+        // tanpa guard. Kalau baris ini sudah maju lagi (write lain terjadi setelah
+        // conflict tercatat, sebelum resolve ini dijalankan), SET tanpa guard bakal
+        // menimpa version ke angka yang lebih KECIL dari yang sekarang — versi
+        // optimistic-locking jadi rusak dan tulisan yang lebih baru bisa ke-overwrite
+        // diam-diam oleh client lain yang masih pegang version lama.
+        const stmt = await c.env.DB.prepare(
+          `UPDATE santri SET ${sets}, version = version + 1, updated_at = datetime('now') WHERE id = ? AND version = ?`
+        ).bind(...vals, conflict.entity_id, conflict.server_version).run()
+        if (stmt.meta.changes === 0) {
+          return c.json({
+            error: 'Conflict',
+            code: 'CONFLICT_STALE',
+            message: 'Data sudah berubah lagi sejak conflict ini tercatat. Silakan resolve ulang dengan data terbaru.'
+          } as ApiError, 409)
+        }
       } else if (updateFields.length > 0 && conflict.entity_type === 'catatan_disiplin') {
         const current = await c.env.DB.prepare(
           'SELECT santri_id, tipe FROM catatan_disiplin WHERE id = ? AND is_deleted = 0'
@@ -394,9 +452,17 @@ sync.post('/conflicts/:id/resolve', requireCanMutate(), async (c) => {
 
         const sets = updateFields.map(([k]) => `${k} = ?`).join(', ')
         const vals = updateFields.map(([, v]) => v)
-        await c.env.DB.prepare(
-          `UPDATE catatan_disiplin SET ${sets}, version = ?, updated_at = datetime('now') WHERE id = ?`
-        ).bind(...vals, conflict.server_version + 1, conflict.entity_id).run()
+        // Guard yang sama seperti cabang santri di atas — lihat komentar di sana.
+        const stmt = await c.env.DB.prepare(
+          `UPDATE catatan_disiplin SET ${sets}, version = version + 1, updated_at = datetime('now') WHERE id = ? AND version = ?`
+        ).bind(...vals, conflict.entity_id, conflict.server_version).run()
+        if (stmt.meta.changes === 0) {
+          return c.json({
+            error: 'Conflict',
+            code: 'CONFLICT_STALE',
+            message: 'Data sudah berubah lagi sejak conflict ini tercatat. Silakan resolve ulang dengan data terbaru.'
+          } as ApiError, 409)
+        }
       }
     }
   }
@@ -501,12 +567,14 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
       // bisa mengirim version yang sengaja basi supaya payload-nya (kelas/kamar/gender
       // di luar scope, atau tidak valid) tersimpan mentah sebagai "conflict" lalu
       // diterapkan lewat /conflicts/:id/resolve tanpa pernah lolos validasi ini.
+      // Existence/is_active cuma dicek untuk field yang BENAR-BENAR berubah
+      // (validatePartialSantriRefs) — kalau tidak, kamar/kelas yang dinonaktifkan
+      // belakangan bisa mem-brick edit lain yang tidak menyentuhnya sama sekali.
       const newKelasId = item.data.kelas_id !== undefined ? item.data.kelas_id : current.kelas_id
       const newKamarId = item.data.kamar_id !== undefined ? item.data.kamar_id : current.kamar_id
-      const newJenisKelamin = item.data.jenis_kelamin !== undefined ? item.data.jenis_kelamin : current.jenis_kelamin
       const targetScopeErr = await checkSantriTargetScope(env, user, newKelasId, newKamarId)
       if (targetScopeErr) return { local_id: item.local_id, status: 'error', error: targetScopeErr }
-      const refErr = await validateSantriRefs(env, newKelasId, newKamarId, newJenisKelamin)
+      const refErr = await validatePartialSantriRefs(env, current, item.data)
       if (refErr) return { local_id: item.local_id, status: 'error', error: refErr }
 
       // Conflict detection
@@ -530,6 +598,15 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
             server_version: current.version
           }
         }
+      }
+
+      // item.version > current.version berarti client mengaku punya version yang
+      // mustahil (belum pernah ada di server) — tolak sebagai error, jangan lanjut ke
+      // UPDATE di bawah. Kalau dibiarkan lanjut, WHERE version=? pasti 0 rows, dan itu
+      // akan salah kena cabang "race" di bawah lalu nge-flood sync_conflicts dengan
+      // conflict palsu (bisa di-replay berkali-kali, tiap kali nambah 1 row pending).
+      if (item.version > current.version) {
+        return { local_id: item.local_id, status: 'error', error: 'INVALID_VERSION' }
       }
 
       // Apply update — whitelist allowed fields
@@ -662,8 +739,8 @@ async function processCatatanSync(env: Env, item: any, user: UserPayload): Promi
       }
 
       const current = await env.DB.prepare(
-        'SELECT cd.id, cd.version, cd.santri_id, s.kelas_id, s.kamar_id FROM catatan_disiplin cd INNER JOIN santri s ON cd.santri_id = s.id WHERE cd.id = ? AND cd.is_deleted = 0'
-      ).bind(serverId).first<{ id: string; version: number; santri_id: string; kelas_id: string | null; kamar_id: string | null }>()
+        'SELECT cd.id, cd.version, cd.santri_id, cd.tipe, s.kelas_id, s.kamar_id FROM catatan_disiplin cd INNER JOIN santri s ON cd.santri_id = s.id WHERE cd.id = ? AND cd.is_deleted = 0'
+      ).bind(serverId).first<{ id: string; version: number; santri_id: string; tipe: string; kelas_id: string | null; kamar_id: string | null }>()
 
       if (!current) {
         return { local_id: item.local_id, status: 'error', error: 'Record not found' }
@@ -675,14 +752,17 @@ async function processCatatanSync(env: Env, item: any, user: UserPayload): Promi
         return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_ACCESSIBLE' }
       }
 
-      // Validasi kategori kalau field itu diubah — sebelumnya tidak dicek di jalur sync.
-      const kategoriErr = await validateKategoriRef(
-        env,
-        item.data.tipe ?? undefined,
-        item.data.kategori_id !== undefined ? item.data.kategori_id : undefined
-      )
-      if (kategoriErr) {
-        return { local_id: item.local_id, status: 'error', error: kategoriErr }
+      // Validasi kategori HANYA kalau kategori_id-nya benar-benar diubah, dan pakai
+      // `tipe` dari DB (current.tipe) — bukan dari item.data.tipe. `tipe` bukan field
+      // yang bisa diupdate (lihat allowedFields di bawah, tidak ada 'tipe'), jadi kalau
+      // dicek dari payload klien, klien bisa kirim tipe:'prestasi' (atau cukup tidak
+      // mengirim `tipe` sama sekali) buat melewati validasi ini sepenuhnya sementara
+      // baris di DB tetap 'pelanggaran' — kategori_id ngambang jadi lolos.
+      if (item.data.kategori_id !== undefined) {
+        const kategoriErr = await validateKategoriRef(env, current.tipe, item.data.kategori_id)
+        if (kategoriErr) {
+          return { local_id: item.local_id, status: 'error', error: kategoriErr }
+        }
       }
 
       if (current.version > item.version) {
@@ -706,6 +786,12 @@ async function processCatatanSync(env: Env, item: any, user: UserPayload): Promi
             server_version: current.version
           }
         }
+      }
+
+      // item.version > current.version = client mengaku punya version yang mustahil —
+      // tolak di sini, jangan lanjut ke UPDATE (lihat komentar sama di processSantriSync).
+      if (item.version > current.version) {
+        return { local_id: item.local_id, status: 'error', error: 'INVALID_VERSION' }
       }
 
       // Whitelist allowed fields
