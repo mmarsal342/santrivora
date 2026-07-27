@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { dashboardService, kegiatanService, santriService } from '@/services'
+import EmptyState from '@/components/EmptyState.vue'
 
 interface DashboardSummary {
   totals: {
@@ -310,11 +311,12 @@ onMounted(() => {
       </button>
     </div>
 
-    <!-- Ustadz welcome -->
-    <div v-if="auth.isUstadz" class="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-green-50 p-6">
-      <div class="flex items-start gap-4">
-        <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-100">
-          <svg class="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+    <!-- Ustadz welcome — bento card besar -->
+    <div v-if="auth.isUstadz" class="relative overflow-hidden rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-white to-green-50 p-6 shadow-xs">
+      <div class="absolute -right-6 -top-6 h-32 w-32 rounded-full bg-emerald-100/50 blur-2xl"></div>
+      <div class="relative flex items-start gap-4">
+        <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-emerald-100 shadow-xs ring-1 ring-emerald-200/50">
+          <svg class="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 14l9-5-9-5-9 5 9 5z" />
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
           </svg>
@@ -334,62 +336,82 @@ onMounted(() => {
               <span class="ml-1 text-emerald-400">· {{ k.jenis_kelamin === 'P' ? 'Putri' : 'Putra' }}</span>
             </span>
           </div>
-          <p v-else class="mt-3 text-sm text-emerald-600 italic">Belum ada kamar yang ditugaskan.</p>
+          <EmptyState v-else title="Belum ada kamar yang ditugaskan" description="Kontak admin untuk penugasan kamar" class="mt-3 bg-emerald-50/50 rounded-lg py-8" />
         </div>
       </div>
     </div>
 
-    <!-- Ustadz Quick Actions -->
+    <!-- Ustadz Quick Actions — action cards -->
     <template v-if="auth.isUstadz">
       <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <button
           @click="router.push('/absensi')"
-          class="flex flex-col items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-300 hover:shadow-md"
+          class="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-xs transition-all hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md"
         >
-          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50">
-            <svg class="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
+          <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 transition group-hover:bg-emerald-100 group-hover:scale-105">
+              <svg class="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div class="text-left">
+              <span class="text-sm font-semibold text-slate-800 group-hover:text-emerald-700">Absen Hari Ini</span>
+              <p class="truncate text-xs text-slate-400">Catat kehadiran santri</p>
+            </div>
           </div>
-          <span class="text-sm font-semibold text-slate-700">Absen Hari Ini</span>
         </button>
         <button
           @click="router.push('/santri')"
-          class="flex flex-col items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-300 hover:shadow-md"
+          class="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-xs transition-all hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md"
         >
-          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-50">
-            <svg class="h-5 w-5 text-sky-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
-            </svg>
+          <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-50 transition group-hover:bg-sky-100 group-hover:scale-105">
+              <svg class="h-5 w-5 text-sky-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+              </svg>
+            </div>
+            <div class="text-left">
+              <span class="text-sm font-semibold text-slate-800 group-hover:text-sky-700">Data Santri</span>
+              <p class="truncate text-xs text-slate-400">Lihat & kelola santri</p>
+            </div>
           </div>
-          <span class="text-sm font-semibold text-slate-700">Data Santri</span>
         </button>
         <button
           @click="router.push('/catatan')"
-          class="flex flex-col items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-300 hover:shadow-md"
+          class="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-xs transition-all hover:-translate-y-0.5 hover:border-amber-300 hover:shadow-md"
         >
-          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50">
-            <svg class="h-5 w-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z" />
-            </svg>
+          <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-50 transition group-hover:bg-amber-100 group-hover:scale-105">
+              <svg class="h-5 w-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z" />
+              </svg>
+            </div>
+            <div class="text-left">
+              <span class="text-sm font-semibold text-slate-800 group-hover:text-amber-700">Catatan Disiplin</span>
+              <p class="truncate text-xs text-slate-400">Pelanggaran & prestasi</p>
+            </div>
           </div>
-          <span class="text-sm font-semibold text-slate-700">Catatan Disiplin</span>
         </button>
         <button
           @click="router.push('/kegiatan')"
-          class="flex flex-col items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-emerald-300 hover:shadow-md"
+          class="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-4 shadow-xs transition-all hover:-translate-y-0.5 hover:border-violet-300 hover:shadow-md"
         >
-          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-50">
-            <svg class="h-5 w-5 text-violet-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
+          <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-50 transition group-hover:bg-violet-100 group-hover:scale-105">
+              <svg class="h-5 w-5 text-violet-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <div class="text-left">
+              <span class="text-sm font-semibold text-slate-800 group-hover:text-violet-700">Kegiatan</span>
+              <p class="truncate text-xs text-slate-400">Kelola jadwal kegiatan</p>
+            </div>
           </div>
-          <span class="text-sm font-semibold text-slate-700">Kegiatan</span>
         </button>
       </div>
 
-      <!-- Kegiatan hari ini -->
-      <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <!-- Kegiatan hari ini — vertical timeline -->
+      <section class="rounded-xl border border-slate-200 bg-white shadow-xs">
         <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4">
           <div>
             <h2 class="text-base font-semibold text-slate-900">Kegiatan Khusus Hari Ini</h2>
@@ -402,33 +424,40 @@ onMounted(() => {
           <div v-for="i in 4" :key="i" class="h-12 animate-pulse rounded-lg bg-slate-100"></div>
         </div>
 
-        <div v-else-if="todayKegiatan.length" class="divide-y divide-slate-50">
+        <div v-else-if="todayKegiatan.length" class="space-y-0 px-5 py-3">
           <button
-            v-for="g in todayKegiatan"
+            v-for="(g, idx) in todayKegiatan"
             :key="g.id"
             @click="router.push({ path: '/absensi', query: { kegiatan_id: g.id } })"
-            class="flex w-full items-center justify-between gap-3 px-5 py-3 text-left transition hover:bg-slate-50"
+            class="group relative flex w-full items-start gap-4 py-3 text-left"
           >
-            <div class="flex items-center gap-3">
-              <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-50">
-                <svg class="h-4 w-4 text-violet-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75" />
+            <!-- timeline line & dot -->
+            <div class="flex flex-col items-center">
+              <div
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 transition border-violet-300 bg-violet-50 group-hover:border-violet-400 group-hover:bg-violet-100"
+              >
+                <svg class="h-3.5 w-3.5 text-violet-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>
               </div>
-              <div>
-                <p class="text-sm font-medium text-slate-800">{{ g.nama }}</p>
-                <p v-if="g.jenis" class="text-xs text-slate-400">{{ g.jenis }}</p>
-              </div>
+              <div v-if="idx < todayKegiatan.length - 1" class="mt-1.5 h-full w-0.5 min-h-[20px] bg-slate-200"></div>
             </div>
-            <svg class="h-4 w-4 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <!-- content -->
+            <div class="min-w-0 flex-1 pb-1">
+              <p class="text-sm font-semibold text-slate-800 group-hover:text-violet-700">{{ g.nama }}</p>
+              <p v-if="g.jenis" class="mt-0.5 text-xs text-slate-400">{{ g.jenis }}</p>
+            </div>
+            <svg class="mt-1.5 h-4 w-4 shrink-0 text-slate-300 group-hover:text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           </button>
         </div>
 
-        <div v-else class="p-8 text-center text-sm text-slate-400">
-          Tidak ada kegiatan khusus hari ini.
-        </div>
+        <EmptyState
+          v-else
+          title="Tidak ada kegiatan khusus hari ini"
+          description="Kegiatan non-rutin akan muncul di sini jika ada jadwal"
+        />
       </section>
 
       <!-- Santri di kamarmu -->
@@ -466,9 +495,13 @@ onMounted(() => {
           </button>
         </div>
 
-        <div v-else class="p-8 text-center text-sm text-slate-400">
-          Belum ada santri aktif di kamar Anda.
-        </div>
+        <EmptyState
+          v-else
+          title="Belum ada santri aktif di kamar Anda"
+          description="Santri yang ditugaskan ke kamar Anda akan tampil di sini"
+          action-label="Lihat semua santri"
+          @action="router.push('/santri')"
+        />
 
         <div v-if="kamarSantri.length > 12" class="border-t border-slate-100 p-3 text-center">
           <button

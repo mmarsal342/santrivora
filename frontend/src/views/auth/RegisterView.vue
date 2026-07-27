@@ -154,6 +154,19 @@ async function handleSubmit(): Promise<void> {
 
 <template>
   <div class="relative flex min-h-screen items-center justify-center bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-800 px-4 py-10">
+    <!-- Geometric pattern overlay -->
+    <svg class="pointer-events-none absolute inset-0 h-full w-full opacity-[0.07]" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="white" stroke-width="0.5"/>
+        </pattern>
+        <pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse">
+          <circle cx="2" cy="2" r="1" fill="white"/>
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#grid)" />
+      <rect width="100%" height="100%" fill="url(#dots)" />
+    </svg>
     <!-- Decorative background -->
     <div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
       <div class="absolute -right-24 -top-24 h-96 w-96 rounded-full bg-white/10 blur-3xl"></div>

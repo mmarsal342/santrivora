@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { santriService, kamarService } from '@/services'
 import { useAuthStore } from '@/stores/auth'
+import EmptyState from '@/components/EmptyState.vue'
 
 interface Santri {
   id: string
@@ -331,25 +332,13 @@ onMounted(() => {
     </div>
 
     <!-- Empty state (no items at all) -->
-    <div v-else class="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center">
-      <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
-        <svg class="h-7 w-7 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-        </svg>
-      </div>
-      <h3 class="mt-4 text-sm font-semibold text-slate-800">Belum ada santri</h3>
-      <p class="mt-1 text-sm text-slate-500">Mulai dengan menambahkan data santri pertama Anda.</p>
-      <button
-        v-if="!auth.isReadOnly"
-        @click="router.push({ name: 'santri-new' })"
-        class="mt-4 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-      >
-        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
-        </svg>
-        Tambah Santri
-      </button>
-    </div>
+    <EmptyState
+      v-else
+      title="Belum ada santri"
+      description="Mulai dengan menambahkan data santri pertama Anda."
+      :action-label="auth.isReadOnly ? undefined : 'Tambah Santri'"
+      @action="router.push({ name: 'santri-new' })"
+    />
 
     <!-- Load more -->
     <div v-if="hasMore && !loading" class="flex justify-center">
