@@ -2,6 +2,12 @@ import { Hono } from 'hono'
 import { authMiddleware, requireAnyRole } from '../middleware/auth'
 import type { ApiError, Env, UserPayload } from '../types'
 
+// Pesantren-nya di WIB (UTC+7), tapi SQLite `date('now', ...)` dan `Date` di JS
+// selalu UTC. Tanpa geser +7 jam dulu, antara jam 00:00-07:00 WIB, "hari ini"
+// versi UTC masih nunjuk ke kemarin — absensi/catatan yang baru dicatat pagi
+// itu jadi kelihatan "belum ada" di rentang tanggal default (lihat `+7 hours`
+// di query SQL di bawah, dan `wibNow()` yang dipakai `defaultDateRange`).
+
 const dashboard = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
 
 dashboard.use('*', authMiddleware)
@@ -30,11 +36,11 @@ dashboard.get('/summary', dashboardRead, async (c) => {
     ).first<{ count: number }>(),
 
     c.env.DB.prepare(
-      `SELECT COUNT(*) as count FROM catatan_disiplin cd ${aj ? `INNER JOIN santri s ON cd.santri_id = s.id INNER JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'` : ''} WHERE cd.tipe = 'pelanggaran' AND cd.is_deleted = 0 AND date(cd.tanggal_kejadian) >= date('now', '-30 days')`
+      `SELECT COUNT(*) as count FROM catatan_disiplin cd ${aj ? `INNER JOIN santri s ON cd.santri_id = s.id INNER JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'` : ''} WHERE cd.tipe = 'pelanggaran' AND cd.is_deleted = 0 AND date(cd.tanggal_kejadian) >= date('now', '+7 hours', '-30 days')`
     ).first<{ count: number }>(),
 
     c.env.DB.prepare(
-      `SELECT COUNT(*) as count FROM catatan_disiplin cd ${aj ? `INNER JOIN santri s ON cd.santri_id = s.id INNER JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'` : ''} WHERE cd.tipe = 'prestasi' AND cd.is_deleted = 0 AND date(cd.tanggal_kejadian) >= date('now', '-30 days')`
+      `SELECT COUNT(*) as count FROM catatan_disiplin cd ${aj ? `INNER JOIN santri s ON cd.santri_id = s.id INNER JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'` : ''} WHERE cd.tipe = 'prestasi' AND cd.is_deleted = 0 AND date(cd.tanggal_kejadian) >= date('now', '+7 hours', '-30 days')`
     ).first<{ count: number }>(),
 
     // Violations per kategori
@@ -43,7 +49,7 @@ dashboard.get('/summary', dashboardRead, async (c) => {
       FROM kategori_pelanggaran kp
       LEFT JOIN catatan_disiplin cd ON cd.kategori_id = kp.id
         AND cd.tipe = 'pelanggaran' AND cd.is_deleted = 0
-        AND date(cd.tanggal_kejadian) >= date('now', '-30 days')
+        AND date(cd.tanggal_kejadian) >= date('now', '+7 hours', '-30 days')
       ${aj ? `LEFT JOIN santri s ON cd.santri_id = s.id LEFT JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'` : ''}
       WHERE kp.is_active = 1 ${aj ? 'AND (cd.id IS NULL OR k.id IS NOT NULL)' : ''}
       GROUP BY kp.id
@@ -59,7 +65,7 @@ dashboard.get('/summary', dashboardRead, async (c) => {
       FROM kamar km
       LEFT JOIN santri s ON s.kamar_id = km.id AND s.status = 'aktif'
       LEFT JOIN catatan_disiplin cd ON cd.santri_id = s.id AND cd.is_deleted = 0
-        AND date(cd.tanggal_kejadian) >= date('now', '-30 days')
+        AND date(cd.tanggal_kejadian) >= date('now', '+7 hours', '-30 days')
       WHERE km.is_active = 1 ${kamarFilter}
       GROUP BY km.id
       ORDER BY km.nama
@@ -76,7 +82,7 @@ dashboard.get('/summary', dashboardRead, async (c) => {
       FROM kamar km
       LEFT JOIN santri s ON s.kamar_id = km.id AND s.status = 'aktif'
       LEFT JOIN catatan_disiplin cd ON cd.santri_id = s.id AND cd.is_deleted = 0
-        AND date(cd.tanggal_kejadian) >= date('now', '-30 days')
+        AND date(cd.tanggal_kejadian) >= date('now', '+7 hours', '-30 days')
       WHERE km.is_active = 1 ${kamarFilter}
       GROUP BY km.jenis_kelamin
     `).all(),
@@ -88,7 +94,7 @@ dashboard.get('/summary', dashboardRead, async (c) => {
       LEFT JOIN kamar km ON s.kamar_id = km.id
       INNER JOIN catatan_disiplin cd ON cd.santri_id = s.id
         AND cd.tipe = 'pelanggaran' AND cd.is_deleted = 0
-        AND date(cd.tanggal_kejadian) >= date('now', '-30 days')
+        AND date(cd.tanggal_kejadian) >= date('now', '+7 hours', '-30 days')
       WHERE s.status = 'aktif' ${aj ? `AND km.jenis_kelamin = '${aj}'` : ''}
       GROUP BY s.id
       ORDER BY total DESC
@@ -129,7 +135,7 @@ dashboard.get('/trends', dashboardRead, async (c) => {
     FROM catatan_disiplin cd
     ${aj ? `INNER JOIN santri s ON cd.santri_id = s.id INNER JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'` : ''}
     WHERE cd.is_deleted = 0
-      AND date(cd.tanggal_kejadian) >= date('now', '-${days} days')
+      AND date(cd.tanggal_kejadian) >= date('now', '+7 hours', '-${days} days')
     GROUP BY date(cd.tanggal_kejadian), cd.tipe
     ORDER BY date(cd.tanggal_kejadian) ASC
   `).all()
@@ -142,10 +148,18 @@ dashboard.get('/trends', dashboardRead, async (c) => {
   })
 })
 
-function defaultDateRange(c: { req: { query: (k: string) => string | undefined } }) {
-  const now = new Date()
-  const sampaiDefault = now.toISOString().slice(0, 10)
-  const dariDefault = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+const WIB_OFFSET_MS = 7 * 60 * 60 * 1000
+
+// `nowMs` cuma buat testability (default `Date.now()` asli di production) —
+// menghindari perlu mock waktu lintas-realm antara test runner dan Workers
+// runtime yang dipakai vitest-pool-workers.
+export function defaultDateRange(
+  c: { req: { query: (k: string) => string | undefined } },
+  nowMs: number = Date.now()
+) {
+  const wibNow = new Date(nowMs + WIB_OFFSET_MS)
+  const sampaiDefault = wibNow.toISOString().slice(0, 10)
+  const dariDefault = new Date(wibNow.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const dari = c.req.query('dari') || dariDefault
   const sampai = c.req.query('sampai') || sampaiDefault
   return { dari, sampai }
@@ -164,17 +178,41 @@ async function computeKamarStats(env: Env, kamarIds: string[], dari: string, sam
 
   const ph = kamarIds.map(() => '?').join(',')
 
-  const santriCount = await env.DB.prepare(
-    `SELECT COUNT(*) as count FROM santri WHERE kamar_id IN (${ph}) AND status = 'aktif'`
-  ).bind(...kamarIds).first<{ count: number }>()
+  // Empat query ini independen (read-only, gak ada urutan yang penting) —
+  // dijalankan paralel, bukan sequential, supaya /per-wali-kamar gak makin
+  // lambat linear seiring jumlah wali kamar bertambah.
+  const [santriCount, absensiRows, disiplinRows, alpaRows] = await Promise.all([
+    env.DB.prepare(
+      `SELECT COUNT(*) as count FROM santri WHERE kamar_id IN (${ph}) AND status = 'aktif'`
+    ).bind(...kamarIds).first<{ count: number }>(),
 
-  const absensiRows = await env.DB.prepare(`
-    SELECT a.status, COUNT(*) as jumlah
-    FROM absensi a
-    INNER JOIN santri s ON a.santri_id = s.id
-    WHERE s.kamar_id IN (${ph}) AND a.tanggal BETWEEN ? AND ?
-    GROUP BY a.status
-  `).bind(...kamarIds, dari, sampai).all<{ status: string; jumlah: number }>()
+    env.DB.prepare(`
+      SELECT a.status, COUNT(*) as jumlah
+      FROM absensi a
+      INNER JOIN santri s ON a.santri_id = s.id
+      WHERE s.kamar_id IN (${ph}) AND a.tanggal BETWEEN ? AND ?
+      GROUP BY a.status
+    `).bind(...kamarIds, dari, sampai).all<{ status: string; jumlah: number }>(),
+
+    env.DB.prepare(`
+      SELECT cd.tipe, COUNT(*) as jumlah
+      FROM catatan_disiplin cd
+      INNER JOIN santri s ON cd.santri_id = s.id
+      WHERE s.kamar_id IN (${ph}) AND cd.is_deleted = 0
+        AND date(cd.tanggal_kejadian) BETWEEN ? AND ?
+      GROUP BY cd.tipe
+    `).bind(...kamarIds, dari, sampai).all<{ tipe: string; jumlah: number }>(),
+
+    env.DB.prepare(`
+      SELECT s.id, s.nama_lengkap, COUNT(*) as jumlah_alpa
+      FROM absensi a
+      INNER JOIN santri s ON a.santri_id = s.id
+      WHERE s.kamar_id IN (${ph}) AND a.status = 'alpa' AND a.tanggal BETWEEN ? AND ?
+      GROUP BY s.id
+      HAVING COUNT(*) >= 3
+      ORDER BY jumlah_alpa DESC
+    `).bind(...kamarIds, dari, sampai).all<{ id: string; nama_lengkap: string; jumlah_alpa: number }>()
+  ])
 
   const absensi = { hadir: 0, sakit: 0, izin: 0, alpa: 0 } as Record<string, number>
   for (const row of absensiRows.results || []) {
@@ -183,29 +221,10 @@ async function computeKamarStats(env: Env, kamarIds: string[], dari: string, sam
   const totalAbsensi = absensi.hadir + absensi.sakit + absensi.izin + absensi.alpa
   const tingkatKehadiran = totalAbsensi > 0 ? Math.round((absensi.hadir / totalAbsensi) * 1000) / 10 : 0
 
-  const disiplinRows = await env.DB.prepare(`
-    SELECT cd.tipe, COUNT(*) as jumlah
-    FROM catatan_disiplin cd
-    INNER JOIN santri s ON cd.santri_id = s.id
-    WHERE s.kamar_id IN (${ph}) AND cd.is_deleted = 0
-      AND date(cd.tanggal_kejadian) BETWEEN ? AND ?
-    GROUP BY cd.tipe
-  `).bind(...kamarIds, dari, sampai).all<{ tipe: string; jumlah: number }>()
-
   const disiplin = { pelanggaran: 0, prestasi: 0 } as Record<string, number>
   for (const row of disiplinRows.results || []) {
     if (row.tipe in disiplin) disiplin[row.tipe] = row.jumlah
   }
-
-  const alpaRows = await env.DB.prepare(`
-    SELECT s.id, s.nama_lengkap, COUNT(*) as jumlah_alpa
-    FROM absensi a
-    INNER JOIN santri s ON a.santri_id = s.id
-    WHERE s.kamar_id IN (${ph}) AND a.status = 'alpa' AND a.tanggal BETWEEN ? AND ?
-    GROUP BY s.id
-    HAVING COUNT(*) >= 3
-    ORDER BY jumlah_alpa DESC
-  `).bind(...kamarIds, dari, sampai).all<{ id: string; nama_lengkap: string; jumlah_alpa: number }>()
 
   const santriButuhPerhatian = (alpaRows.results || []).map((r) => ({
     id: r.id,
@@ -239,33 +258,38 @@ dashboard.get('/per-wali-kamar', dashboardRead, async (c) => {
      ORDER BY u.nama_lengkap ASC`
   ).all<{ id: string; email: string; nama_lengkap: string; status: string }>()
 
-  const data = []
-  for (const u of waliList.results || []) {
+  // Per wali kamar independen satu sama lain (read-only) — paralelkan, jangan
+  // sequential, biar endpoint ini gak makin lambat linear seiring jumlah
+  // wali kamar bertambah.
+  const data = await Promise.all((waliList.results || []).map(async (u) => {
     const kamarAssignments = await c.env.DB.prepare(
       `SELECT k.id, k.nama, k.jenis_kelamin FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = ? AND k.is_active = 1 ${aj ? `AND k.jenis_kelamin = '${aj}'` : ''}`
     ).bind(u.id).all<{ id: string; nama: string; jenis_kelamin: string }>()
     const kamarRows = kamarAssignments.results || []
     const kamarIds = kamarRows.map((k) => k.id)
 
-    const stats = await computeKamarStats(c.env, kamarIds, dari, sampai)
-
     // catatanHaid.ts (assertHaidAccess) eksplisit blokir kyai dari data haid
     // (data sensitif) walau kyai global-read di tempat lain — dashboard ini
     // sebelumnya gak ikut aturan itu. Skip query-nya sama sekali buat kyai,
     // bukan cuma sembunyikan hasilnya.
-    let catatanHaidTercatat: number | null = null
     const kamarPutriIds = user.role === 'kyai' ? [] : kamarRows.filter((k) => k.jenis_kelamin === 'P').map((k) => k.id)
-    if (kamarPutriIds.length > 0) {
-      const ph = kamarPutriIds.map(() => '?').join(',')
-      const haidCount = await c.env.DB.prepare(`
-        SELECT COUNT(*) as count FROM catatan_haid ch
-        INNER JOIN santri s ON ch.santri_id = s.id
-        WHERE s.kamar_id IN (${ph}) AND ch.tanggal BETWEEN ? AND ?
-      `).bind(...kamarPutriIds, dari, sampai).first<{ count: number }>()
-      catatanHaidTercatat = haidCount?.count || 0
-    }
 
-    data.push({
+    const [stats, catatanHaidTercatat] = await Promise.all([
+      computeKamarStats(c.env, kamarIds, dari, sampai),
+      kamarPutriIds.length > 0
+        ? (async () => {
+            const ph = kamarPutriIds.map(() => '?').join(',')
+            const haidCount = await c.env.DB.prepare(`
+              SELECT COUNT(*) as count FROM catatan_haid ch
+              INNER JOIN santri s ON ch.santri_id = s.id
+              WHERE s.kamar_id IN (${ph}) AND ch.tanggal BETWEEN ? AND ?
+            `).bind(...kamarPutriIds, dari, sampai).first<{ count: number }>()
+            return haidCount?.count || 0
+          })()
+        : Promise.resolve(null as number | null)
+    ])
+
+    return {
       id: u.id,
       nama_lengkap: u.nama_lengkap,
       email: u.email,
@@ -273,8 +297,8 @@ dashboard.get('/per-wali-kamar', dashboardRead, async (c) => {
       assigned_kamar: kamarRows,
       catatan_haid_tercatat: catatanHaidTercatat,
       ...stats
-    })
-  }
+    }
+  }))
 
   return c.json({ data, period: { dari, sampai } })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dashboardRoutes } from '../dashboard'
+import { dashboardRoutes, defaultDateRange } from '../dashboard'
 import { authHeaders, seedKamar, seedSantri, seedUser, testEnv, uuid } from '../../../test/helpers'
 
 // Audit MEDIUM #1: catatanHaid.ts (assertHaidAccess) eksplisit blokir kyai dari
@@ -30,5 +30,33 @@ describe('dashboard.ts — GET /per-wali-kamar tidak bocorin data haid ke kyai (
     const adminBody = await adminRes.json() as { data: Array<{ id: string; catatan_haid_tercatat: number | null }> }
     const adminEntry = adminBody.data.find((d) => d.id === wali.id)
     expect(adminEntry?.catatan_haid_tercatat).toBe(1)
+  })
+})
+
+// Audit MEDIUM #5: default date range dashboard pakai UTC, bukan WIB (UTC+7).
+// Antara jam 00:00-07:00 WIB, versi UTC masih nunjuk ke tanggal kemarin.
+// `nowMs` di sini cuma untuk testability (lihat komentar di dashboard.ts) —
+// menghindar dari perlu mock waktu lintas-realm ke Workers runtime.
+describe('dashboard.ts — defaultDateRange pakai WIB, bukan UTC (audit MEDIUM #5)', () => {
+  it('jam 01:00 WIB (18:00 UTC hari sebelumnya) tetap dianggap "hari ini" WIB', () => {
+    // 2026-01-31T18:00:00Z = 2026-02-01T01:00:00 WIB — beda tanggal kalender
+    // antara UTC dan WIB, persis kasus yang dulu salah.
+    const nowMs = new Date('2026-01-31T18:00:00.000Z').getTime()
+    const fakeReq = { req: { query: () => undefined } }
+
+    const { dari, sampai } = defaultDateRange(fakeReq, nowMs)
+
+    expect(sampai).toBe('2026-02-01')
+    expect(dari).toBe('2026-01-03')
+  })
+
+  it('query param dari/sampai eksplisit tetap menang, gak ketimpa default WIB', () => {
+    const nowMs = new Date('2026-01-31T18:00:00.000Z').getTime()
+    const fakeReq = { req: { query: (k: string) => (k === 'dari' ? '2025-06-01' : k === 'sampai' ? '2025-06-30' : undefined) } }
+
+    const { dari, sampai } = defaultDateRange(fakeReq, nowMs)
+
+    expect(dari).toBe('2025-06-01')
+    expect(sampai).toBe('2025-06-30')
   })
 })
