@@ -96,10 +96,21 @@ export const requireAdmin = requireAnyRole('admin')
  * yang kebetulan jatuh di detik integer yang sama persis dengan aksi admin bisa
  * ikut ditolak sekali (harus retry) — trade-off yang jauh lebih aman daripada
  * membiarkan token lama lolos.
+ *
+ * `cutoffSecOverride` dipakai HANYA oleh flow yang mint token baru untuk user
+ * yang sama di request yang sama (misal self-service change-password, yang
+ * sengaja mengeluarkan token baru buat device yang lagi dipakai supaya user
+ * tidak ke-logout dari device-nya sendiri). Tanpa override, cutoff = "sekarang"
+ * — dan karena token baru itu di-generate cuma beberapa milidetik sesudahnya,
+ * `iat`-nya nyaris pasti sama dengan cutoff itu (granularitas detik), yang
+ * berarti token baru itu SENDIRI kena tolak oleh pengecekan inklusif di atas.
+ * Caller di kasus ini wajib pass `cutoffSecOverride = <detik saat ini> - 1`
+ * supaya semua token LAMA (device lain) tetap kena, tapi token baru yang segera
+ * di-mint (iat = detik saat ini) lolos.
  */
-export async function invalidateUserAccessTokens(env: Env, userId: string | undefined): Promise<void> {
+export async function invalidateUserAccessTokens(env: Env, userId: string | undefined, cutoffSecOverride?: number): Promise<void> {
   if (!userId) return
-  const cutoffSec = Math.floor(Date.now() / 1000)
+  const cutoffSec = cutoffSecOverride ?? Math.floor(Date.now() / 1000)
   await env.KV.put(`revoke_before:${userId}`, String(cutoffSec), { expirationTtl: 900 })
 }
 
