@@ -70,7 +70,17 @@ export function useEntityMutation<T = Record<string, unknown>>(entityType: strin
     if (config.eligibility === 'pull-only') {
       if (!config.service?.remove) throw new Error(`${entityType}: service.remove tidak tersedia`)
       await config.service.remove(id)
-      await table.delete(id)
+      // Kalau entity ini soft-delete (mis. kamar/kelas set is_active=0, BUKAN
+      // hard-delete beneran), cache lokal juga di-UPDATE (bukan dihapus) —
+      // beberapa view (mis. KelasListView) sengaja nampilin baris nonaktif
+      // dengan badge, bukan menyembunyikannya. Hard-delete dari cache di sini
+      // bikin baris itu vanish sesaat sampai pull berikutnya "mengembalikan"-nya.
+      if (config.softDelete) {
+        const current = (await table.get(id)) as Record<string, unknown> | undefined
+        if (current) await table.put({ ...current, [config.softDelete.column]: config.softDelete.setValue })
+      } else {
+        await table.delete(id)
+      }
       return
     }
 
@@ -86,8 +96,10 @@ export function useEntityMutation<T = Record<string, unknown>>(entityType: strin
       // secara optimistic (persis apa yang push.ts lakukan lagi setelah
       // sync sungguhan), biar filter status lokal (mis. 'keluar') tetap benar
       // tanpa nunggu pull ulang.
-      const pending = await db.outbox.where('[entityType+localId]').equals([entityType, id]).first()
-      const neverSynced = pending?.action === 'create'
+      // Bisa ada DUA row pending sekaligus (create + update terpisah, lihat
+      // outbox.ts) — cek APAKAH SALAH SATUNYA 'create', bukan cuma row pertama.
+      const pendingRows = await db.outbox.where('[entityType+localId]').equals([entityType, id]).toArray()
+      const neverSynced = pendingRows.some((r) => r.action === 'create')
       if (config.softDelete && !neverSynced) {
         if (current) await table.put({ ...current, [config.softDelete.column]: config.softDelete.setValue, updated_at: new Date().toISOString() })
       } else {

@@ -1,18 +1,42 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { kelasService } from '@/services'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
+import { pullAll } from '@/offline/sync/engine'
 
 interface Kelas {
   id: string
   nama: string
   tingkatan?: string
   tahun_ajaran?: string
-  jumlah_santri?: number
-  is_active?: boolean
+  is_active?: number
 }
 
-const list = ref<Kelas[]>([])
-const loading = ref(false)
+interface Santri {
+  id: string
+  kelas_id: string | null
+  status: string
+}
+
+// kelas 'pull-only' — mirror kamar. jumlah_santri yang dulu lewat JOIN server
+// sekarang dihitung client-side dari cache santri (sudah ikut ke-pull juga).
+const { items: list, loading } = useEntityList<Kelas>('kelas', {
+  sort: (a, b) => (a.tingkatan ?? '').localeCompare(b.tingkatan ?? '') || a.nama.localeCompare(b.nama),
+  pageSize: 1000
+})
+const { allItems: allSantri } = useEntityList<Santri>('santri')
+const jumlahSantriByKelas = computed(() => {
+  const map = new Map<string, number>()
+  for (const s of allSantri.value) {
+    if (s.status !== 'aktif' || !s.kelas_id) continue
+    map.set(s.kelas_id, (map.get(s.kelas_id) ?? 0) + 1)
+  }
+  return map
+})
+
+const mutation = useEntityMutation<Kelas>('kelas')
+
 const error = ref('')
 const modalOpen = ref(false)
 const editingId = ref<string | null>(null)
@@ -37,19 +61,6 @@ function resetForm() {
   form.tingkatan = ''
   form.tahun_ajaran = ''
   editingId.value = null
-}
-
-async function fetchList() {
-  loading.value = true
-  error.value = ''
-  try {
-    list.value = (await kelasService.list()) as Kelas[]
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal memuat kelas'
-  } finally {
-    loading.value = false
-  }
 }
 
 function openCreate() {
@@ -80,13 +91,12 @@ async function submit() {
       tahun_ajaran: form.tahun_ajaran || undefined
     }
     if (editingId.value) {
-      await kelasService.update(editingId.value, payload)
+      await mutation.update(editingId.value, payload)
     } else {
-      await kelasService.create(payload)
+      await mutation.create(payload)
     }
     modalOpen.value = false
     resetForm()
-    await fetchList()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal menyimpan kelas'
@@ -97,17 +107,17 @@ async function submit() {
 
 function confirmDelete(k: Kelas) {
   deleteTarget.value = k
+  const jumlah = jumlahSantriByKelas.value.get(k.id) ?? 0
   deleteWarning.value =
-    (k.jumlah_santri ?? 0) > 0
-      ? `Kelas ini memiliki ${k.jumlah_santri} santri. Yakin ingin menghapus?`
+    jumlah > 0
+      ? `Kelas ini memiliki ${jumlah} santri. Yakin ingin menghapus?`
       : 'Yakin ingin menghapus kelas ini?'
 }
 
 async function doDelete() {
   if (!deleteTarget.value) return
   try {
-    await kelasService.remove(deleteTarget.value.id)
-    list.value = list.value.filter((k) => k.id !== deleteTarget.value!.id)
+    await mutation.remove(deleteTarget.value.id)
     deleteTarget.value = null
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
@@ -132,12 +142,15 @@ async function submitNaikkan() {
   naikkanSubmitting.value = true
   naikkanError.value = ''
   try {
+    // Operasi bulk sekali-jalan, TETAP online-only (gak dimodel sebagai sync
+    // mutation) — efeknya nyampe ke cache offline lewat entity santri yang
+    // sudah kena update kelas_id-nya, ditarik lewat pull biasa di bawah.
     const res = await kelasService.naikkan(naikkanTarget.value.id, {
       lulus: naikkanForm.mode === 'lulus',
       target_kelas_id: naikkanForm.mode === 'naik' ? naikkanForm.target_kelas_id : undefined
     })
     naikkanResult.value = res.message || 'Berhasil diproses.'
-    await fetchList()
+    pullAll().catch(() => {})
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     naikkanError.value = err?.response?.data?.message || 'Gagal memproses kenaikan kelas'
@@ -145,8 +158,6 @@ async function submitNaikkan() {
     naikkanSubmitting.value = false
   }
 }
-
-onMounted(fetchList)
 </script>
 
 <template>
@@ -202,17 +213,17 @@ onMounted(fetchList)
               <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">{{ k.nama }}</td>
               <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-600">{{ k.tingkatan || '-' }}</td>
               <td class="hidden whitespace-nowrap px-4 py-3 text-sm text-gray-600 sm:table-cell">{{ k.tahun_ajaran || '-' }}</td>
-              <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-600">{{ k.jumlah_santri ?? 0 }}</td>
+              <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-600">{{ jumlahSantriByKelas.get(k.id) ?? 0 }}</td>
               <td class="px-4 py-3">
                 <span
                   :class="[
                     'inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium',
-                    k.is_active !== false
+                    k.is_active !== 0
                       ? 'bg-green-100 text-green-800'
                       : 'bg-gray-100 text-gray-600'
                   ]"
                 >
-                  {{ k.is_active !== false ? 'Aktif' : 'Nonaktif' }}
+                  {{ k.is_active !== 0 ? 'Aktif' : 'Nonaktif' }}
                 </span>
               </td>
               <td class="whitespace-nowrap px-4 py-3 text-right">
@@ -320,7 +331,7 @@ onMounted(fetchList)
         <h2 class="mb-1 text-lg font-semibold text-gray-900">Naikkan Kelas</h2>
         <p class="mb-4 text-sm text-gray-500">
           Berlaku untuk semua santri aktif di <strong>{{ naikkanTarget.nama }}</strong>
-          ({{ naikkanTarget.jumlah_santri ?? 0 }} santri). Kamar tidak ikut berubah.
+          ({{ jumlahSantriByKelas.get(naikkanTarget.id) ?? 0 }} santri). Kamar tidak ikut berubah.
         </p>
         <div v-if="naikkanError" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{{ naikkanError }}</div>
         <div v-if="naikkanResult" class="mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700">{{ naikkanResult }}</div>

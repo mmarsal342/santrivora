@@ -1,17 +1,29 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { kategoriService } from '@/services'
+import { ref, reactive } from 'vue'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
 
 interface Kategori {
   id: string
   nama: string
   deskripsi?: string
   urutan_keparahan?: number
-  catatan_count?: number
+  is_active?: number
 }
 
-const list = ref<Kategori[]>([])
-const loading = ref(false)
+// Sengaja TANPA filter is_active — mirror perilaku asli (kategoriService.list()
+// dipanggil tanpa param, jadi backend gak nge-filter apa pun; halaman ini
+// gak punya konsep status aktif/nonaktif di UI-nya sama sekali). catatan_count
+// (dulu JOIN server ke catatan_disiplin) TIDAK bisa dihitung client-side lagi
+// — catatan_disiplin belum masuk cache offline (gelombang 2). Peringatan
+// hapus jadi generik, bukan angka pasti (lihat modal hapus).
+const { items: list, loading } = useEntityList<Kategori>('kategori_pelanggaran', {
+  sort: (a, b) => (a.urutan_keparahan ?? 0) - (b.urutan_keparahan ?? 0),
+  pageSize: 1000
+})
+
+const mutation = useEntityMutation<Kategori>('kategori_pelanggaran')
+
 const error = ref('')
 const modalOpen = ref(false)
 const editingId = ref<string | null>(null)
@@ -29,19 +41,6 @@ function resetForm() {
   form.deskripsi = ''
   form.urutan_keparahan = 1
   editingId.value = null
-}
-
-async function fetchList() {
-  loading.value = true
-  error.value = ''
-  try {
-    list.value = (await kategoriService.list()) as Kategori[]
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal memuat kategori'
-  } finally {
-    loading.value = false
-  }
 }
 
 function openCreate() {
@@ -72,13 +71,12 @@ async function submit() {
       urutan_keparahan: Number(form.urutan_keparahan) || 1
     }
     if (editingId.value) {
-      await kategoriService.update(editingId.value, payload)
+      await mutation.update(editingId.value, payload)
     } else {
-      await kategoriService.create(payload)
+      await mutation.create(payload)
     }
     modalOpen.value = false
     resetForm()
-    await fetchList()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal menyimpan kategori'
@@ -94,8 +92,7 @@ function confirmDelete(k: Kategori) {
 async function doDelete() {
   if (!deleteTarget.value) return
   try {
-    await kategoriService.remove(deleteTarget.value.id)
-    list.value = list.value.filter((k) => k.id !== deleteTarget.value!.id)
+    await mutation.remove(deleteTarget.value.id)
     deleteTarget.value = null
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
@@ -116,8 +113,6 @@ function severityLabel(level: number): string {
   if (level <= 7) return 'Berat'
   return 'Sangat Berat'
 }
-
-onMounted(fetchList)
 </script>
 
 <template>
@@ -205,12 +200,6 @@ onMounted(fetchList)
           ></div>
         </div>
 
-        <div class="flex items-center gap-1.5 text-xs text-gray-400">
-          <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
-          <span>{{ k.catatan_count ?? 0 }} catatan</span>
-        </div>
       </div>
     </div>
 
@@ -296,11 +285,8 @@ onMounted(fetchList)
         <p class="mb-4 text-sm text-gray-600">
           Yakin ingin menghapus <strong>{{ deleteTarget.nama }}</strong>?
         </p>
-        <div
-          v-if="(deleteTarget.catatan_count ?? 0) > 0"
-          class="mb-4 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-xs text-yellow-800"
-        >
-          ⚠️ Kategori ini terkait dengan {{ deleteTarget.catatan_count }} catatan. Menghapus dapat memengaruhi data terkait.
+        <div class="mb-4 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-xs text-yellow-800">
+          ⚠️ Kategori ini mungkin terkait dengan catatan disiplin yang sudah ada. Menghapus dapat memengaruhi data terkait.
         </div>
         <div class="flex gap-3">
           <button

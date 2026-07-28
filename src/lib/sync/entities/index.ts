@@ -10,6 +10,7 @@ import { catatanHaidSyncConfig } from './catatanHaid'
 import { kelasSyncConfig } from './kelas'
 import { kamarSyncConfig } from './kamar'
 import { perizinanPulangSyncConfig } from './perizinanPulang'
+import { kategoriPelanggaranSyncConfig } from './kategoriPelanggaran'
 
 registerEntity(santriSyncConfig)
 registerEntity(catatanDisiplinSyncConfig)
@@ -22,3 +23,4 @@ registerEntity(catatanHaidSyncConfig)
 registerEntity(kelasSyncConfig)
 registerEntity(kamarSyncConfig)
 registerEntity(perizinanPulangSyncConfig)
+registerEntity(kategoriPelanggaranSyncConfig)

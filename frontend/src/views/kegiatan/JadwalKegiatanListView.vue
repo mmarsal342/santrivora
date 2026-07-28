@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
-import { jadwalKegiatanService, kelasService, kamarService } from '@/services'
+import { ref, reactive, computed } from 'vue'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
 
 interface Kelas {
   id: string
@@ -20,15 +21,20 @@ interface JadwalKegiatan {
   urutan: number
   kelas_id?: string | null
   kamar_id?: string | null
-  kelas_nama?: string | null
-  kamar_nama?: string | null
   is_active: number
 }
 
-const list = ref<JadwalKegiatan[]>([])
-const kelasList = ref<Kelas[]>([])
-const kamarList = ref<Kamar[]>([])
-const loading = ref(false)
+const { items: list, loading } = useEntityList<JadwalKegiatan>('jadwal_kegiatan', {
+  sort: (a, b) => (b.is_active - a.is_active) || (a.urutan - b.urutan) || a.nama.localeCompare(b.nama),
+  pageSize: 1000
+})
+const { allItems: kelasList } = useEntityList<Kelas>('kelas')
+const { allItems: kamarList } = useEntityList<Kamar>('kamar')
+const kelasNameById = computed(() => new Map(kelasList.value.map((k) => [k.id, k.nama])))
+const kamarNameById = computed(() => new Map(kamarList.value.map((k) => [k.id, k.nama])))
+
+const mutation = useEntityMutation<JadwalKegiatan>('jadwal_kegiatan')
+
 const error = ref('')
 const modalOpen = ref(false)
 const editingId = ref<string | null>(null)
@@ -52,35 +58,7 @@ function resetForm() {
   editingId.value = null
 }
 
-const sortedList = computed(() =>
-  [...list.value].sort((a, b) => (b.is_active - a.is_active) || (a.urutan - b.urutan) || a.nama.localeCompare(b.nama))
-)
-
-async function fetchList() {
-  loading.value = true
-  error.value = ''
-  try {
-    list.value = await jadwalKegiatanService.list()
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal memuat jadwal kegiatan'
-  } finally {
-    loading.value = false
-  }
-}
-
-async function fetchOptions() {
-  try {
-    kelasList.value = (await kelasService.list()) as Kelas[]
-  } catch {
-    kelasList.value = []
-  }
-  try {
-    kamarList.value = (await kamarService.list()) as Kamar[]
-  } catch {
-    kamarList.value = []
-  }
-}
+const sortedList = computed(() => list.value)
 
 function openCreate() {
   resetForm()
@@ -108,7 +86,7 @@ async function submit() {
     if (editingId.value) {
       // update: kirim null biar kelas/kamar yang dikosongkan balik jadi "Umum",
       // bukan undefined (yang artinya "jangan diubah" di backend)
-      await jadwalKegiatanService.update(editingId.value, {
+      await mutation.update(editingId.value, {
         nama: form.nama,
         jenis: form.jenis || null,
         urutan: form.urutan,
@@ -116,7 +94,7 @@ async function submit() {
         kamar_id: form.kamar_id || null
       })
     } else {
-      await jadwalKegiatanService.create({
+      await mutation.create({
         nama: form.nama,
         jenis: form.jenis || undefined,
         urutan: form.urutan,
@@ -126,7 +104,6 @@ async function submit() {
     }
     modalOpen.value = false
     resetForm()
-    await fetchList()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || (e instanceof Error ? e.message : 'Gagal menyimpan jadwal kegiatan')
@@ -137,8 +114,7 @@ async function submit() {
 
 async function toggleActive(j: JadwalKegiatan) {
   try {
-    await jadwalKegiatanService.update(j.id, { is_active: j.is_active ? 0 : 1 })
-    await fetchList()
+    await mutation.update(j.id, { is_active: j.is_active ? 0 : 1 })
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal mengubah status jadwal.'
@@ -152,19 +128,13 @@ function confirmDelete(j: JadwalKegiatan) {
 async function doDelete() {
   if (!deleteTarget.value) return
   try {
-    await jadwalKegiatanService.remove(deleteTarget.value.id)
+    await mutation.remove(deleteTarget.value.id)
     deleteTarget.value = null
-    await fetchList()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal menghapus jadwal kegiatan'
   }
 }
-
-onMounted(() => {
-  fetchList()
-  fetchOptions()
-})
 </script>
 
 <template>
@@ -224,9 +194,9 @@ onMounted(() => {
               <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">{{ j.nama }}</td>
               <td class="hidden whitespace-nowrap px-4 py-3 text-sm text-gray-600 sm:table-cell">{{ j.jenis || '-' }}</td>
               <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-600">
-                <span v-if="j.kelas_nama" class="mr-1 inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs text-sky-700">{{ j.kelas_nama }}</span>
-                <span v-if="j.kamar_nama" class="mr-1 inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">{{ j.kamar_nama }}</span>
-                <span v-if="!j.kelas_nama && !j.kamar_nama" class="text-gray-400">Umum</span>
+                <span v-if="j.kelas_id" class="mr-1 inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs text-sky-700">{{ kelasNameById.get(j.kelas_id) ?? '-' }}</span>
+                <span v-if="j.kamar_id" class="mr-1 inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">{{ kamarNameById.get(j.kamar_id) ?? '-' }}</span>
+                <span v-if="!j.kelas_id && !j.kamar_id" class="text-gray-400">Umum</span>
               </td>
               <td class="whitespace-nowrap px-4 py-3">
                 <button

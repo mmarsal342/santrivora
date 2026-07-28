@@ -9,6 +9,8 @@ export const kamarEntityConfig: EntityConfig = {
   entityType: 'kamar',
   dexieSchema: '&id, jenis_kelamin, is_active, updated_at',
   eligibility: 'pull-only',
+  // Mirror kamar.ts DELETE — soft-delete (is_active=0), bukan hard-delete.
+  softDelete: { column: 'is_active', setValue: 0 },
   service: {
     list: () => kamarService.list({ status: 'semua' }),
     get: (id) => kamarService.get(id),
