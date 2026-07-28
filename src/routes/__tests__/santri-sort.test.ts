@@ -106,4 +106,18 @@ describe('santri.ts — GET / sort (default nama, dukung kelas/kamar)', () => {
     const res = await santriRoutes.request('/?limit=10&cursor=bukan-json-valid', { headers: authHeaders(admin.accessToken) }, testEnv())
     expect(res.status).toBe(200)
   })
+
+  it('cursor JSON valid tapi bentuknya salah (field hilang/tipe salah) diabaikan, bukan 500', async () => {
+    const admin = await seedUser({ role: 'admin' })
+    await seedSantri({ nama_lengkap: 'Test Cursor Shape' })
+
+    const malformedCursors = ['{}', '{"id":"x"}', '{"n":123,"id":"x"}', '{"n":"x","id":456}', '{"g":123,"n":"x","id":"y"}']
+    for (const cursor of malformedCursors) {
+      const res = await santriRoutes.request(
+        `/?limit=10&sort=kelas&cursor=${encodeURIComponent(cursor)}`,
+        { headers: authHeaders(admin.accessToken) }, testEnv()
+      )
+      expect(res.status).toBe(200)
+    }
+  })
 })

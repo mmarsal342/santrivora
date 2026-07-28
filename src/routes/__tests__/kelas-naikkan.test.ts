@@ -104,4 +104,39 @@ describe('kelas.ts — POST /:id/naikkan (kenaikan kelas massal)', () => {
     expect(rowA?.kelas_id).toBe(kelasBaru)
     expect(rowB?.kelas_id).toBe(kelasLama)
   })
+
+  it('santri_ids lebih dari 500 ditolak 400 (bukan diteruskan mentah ke query IN(...))', async () => {
+    const admin = await seedUser({ role: 'admin' })
+    const kelasLama = await seedKelas()
+    const kelasBaru = await seedKelas()
+    const tooMany = Array.from({ length: 501 }, () => crypto.randomUUID())
+
+    const res = await kelasRoutes.request(`/${kelasLama}/naikkan`, {
+      method: 'POST',
+      headers: authHeaders(admin.accessToken),
+      body: JSON.stringify({ lulus: false, target_kelas_id: kelasBaru, santri_ids: tooMany })
+    }, testEnv())
+    expect(res.status).toBe(400)
+  })
+
+  it('lulus massal (banyak santri sekaligus) menutup riwayat kamar semuanya dalam 1 batch', async () => {
+    const admin = await seedUser({ role: 'admin' })
+    const kelasAkhir = await seedKelas()
+    const kamar = await seedKamar({ jenis_kelamin: 'L' })
+    const santriList = await Promise.all(
+      Array.from({ length: 5 }, () => seedSantri({ jenis_kelamin: 'L', kelas_id: kelasAkhir, kamar_id: kamar }))
+    )
+
+    const res = await kelasRoutes.request(`/${kelasAkhir}/naikkan`, {
+      method: 'POST',
+      headers: authHeaders(admin.accessToken),
+      body: JSON.stringify({ lulus: true })
+    }, testEnv())
+    expect(res.status).toBe(200)
+
+    for (const santriId of santriList) {
+      const row = await testEnv().DB.prepare('SELECT selesai_at FROM riwayat_kamar_santri WHERE santri_id = ?').bind(santriId).first<{ selesai_at: string | null }>()
+      expect(row?.selesai_at).not.toBeNull()
+    }
+  })
 })

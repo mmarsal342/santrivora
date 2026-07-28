@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { santriRoutes } from '../santri'
 import { adminRoutes } from '../admin'
 import { personelRoutes } from '../personel'
-import { authHeaders, seedKamar, seedUser, testEnv } from '../../../test/helpers'
+import { recordSantriKamarChange } from '../../lib/riwayatKamar'
+import { authHeaders, seedKamar, seedSantri, seedUser, testEnv } from '../../../test/helpers'
 
 describe('riwayat kamar santri — dicatat lewat santri.ts', () => {
   it('create santri dengan kamar_id langsung buka span riwayat terbuka', async () => {
@@ -168,5 +169,34 @@ describe('personel.ts — GET /:id/santri-riwayat', () => {
     }, testEnv())
     const body = await res.json() as { data: Array<{ santri_id: string }> }
     expect(body.data.find((d) => d.santri_id === santri.data.id)).toBeUndefined()
+  })
+})
+
+describe('recordSantriKamarChange — self-healing terhadap span ganda yang kebetulan sudah terbuka', () => {
+  it('menutup SEMUA span terbuka (bukan cuma yang match oldKamarId) sebelum buka span baru', async () => {
+    // Simulasi hasil race condition: dua span "terbuka" ke kamar berbeda buat 1
+    // santri yang sama (mis. dari dua PUT konkuren yang lolos karena santri.ts
+    // PUT /:id tidak punya guard optimistic-concurrency di UPDATE-nya).
+    const kamarA = await seedKamar({ jenis_kelamin: 'L' })
+    const kamarB = await seedKamar({ jenis_kelamin: 'L' })
+    const kamarC = await seedKamar({ jenis_kelamin: 'L' })
+    const santri = await seedSantri({ jenis_kelamin: 'L', kamar_id: kamarC })
+
+    await testEnv().DB.prepare(
+      'INSERT INTO riwayat_kamar_santri (id, santri_id, kamar_id, selesai_at) VALUES (?, ?, ?, NULL)'
+    ).bind(crypto.randomUUID(), santri, kamarA).run()
+    await testEnv().DB.prepare(
+      'INSERT INTO riwayat_kamar_santri (id, santri_id, kamar_id, selesai_at) VALUES (?, ?, ?, NULL)'
+    ).bind(crypto.randomUUID(), santri, kamarB).run()
+
+    // oldKamarId yang dipassing (kamarA) cuma match SATU dari dua span terbuka itu —
+    // sebelum fix, ini akan menyisakan span kamarB tetap terbuka selamanya.
+    await recordSantriKamarChange(testEnv(), santri, kamarA, kamarC)
+
+    const openRows = await testEnv().DB.prepare(
+      'SELECT kamar_id FROM riwayat_kamar_santri WHERE santri_id = ? AND selesai_at IS NULL'
+    ).bind(santri).all<{ kamar_id: string }>()
+    expect(openRows.results.length).toBe(1)
+    expect(openRows.results[0].kamar_id).toBe(kamarC)
   })
 })

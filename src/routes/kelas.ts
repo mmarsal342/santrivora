@@ -2,7 +2,6 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import { authMiddleware } from '../middleware/auth'
-import { closeSantriKamarHistory } from '../lib/riwayatKamar'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const kelas = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -22,7 +21,7 @@ const updateSchema = createSchema.partial().extend({
 const naikkanSchema = z.object({
   lulus: z.boolean(),
   target_kelas_id: z.string().uuid().optional(),
-  santri_ids: z.array(z.string().uuid()).optional()
+  santri_ids: z.array(z.string().uuid()).max(500).optional()
 }).refine((data) => data.lulus || !!data.target_kelas_id, {
   message: 'target_kelas_id wajib diisi kalau bukan kelulusan',
   path: ['target_kelas_id']
@@ -193,6 +192,10 @@ kelas.post('/:id/naikkan', requireAdmin, zValidator('json', naikkanSchema), asyn
   const { lulus, target_kelas_id, santri_ids } = c.req.valid('json')
   const user = c.get('user')
 
+  // Kelas asal SENGAJA tidak wajib is_active=1 (beda dari kelas tujuan di bawah) —
+  // santri yang kelas-nya sudah dinonaktifkan (tapi santrinya sendiri masih aktif)
+  // justru butuh jalur ini buat "diselamatkan" pindah ke kelas aktif lain; kalau
+  // source diwajibkan aktif, mereka malah tidak bisa dipindah dari sini sama sekali.
   const source = await c.env.DB.prepare('SELECT id FROM kelas WHERE id = ?').bind(sourceKelasId).first()
   if (!source) {
     return c.json({
@@ -252,9 +255,12 @@ kelas.post('/:id/naikkan', requireAdmin, zValidator('json', naikkanSchema), asyn
     await c.env.DB.prepare(
       `UPDATE santri SET status = 'lulus', version = version + 1, updated_at = datetime('now') WHERE id IN (${ph})`
     ).bind(...ids).run()
-    for (const santriId of ids) {
-      await closeSantriKamarHistory(c.env, santriId)
-    }
+    // Batch 1 statement, bukan loop per-santri — santri_ids bisa sampai ratusan
+    // (lihat cap di naikkanSchema), loop sequential sebelumnya berarti ratusan
+    // round-trip D1 terpisah buat operasi yang sebenarnya cuma 1 UPDATE.
+    await c.env.DB.prepare(
+      `UPDATE riwayat_kamar_santri SET selesai_at = datetime('now') WHERE santri_id IN (${ph}) AND selesai_at IS NULL`
+    ).bind(...ids).run()
   } else {
     await c.env.DB.prepare(
       `UPDATE santri SET kelas_id = ?, version = version + 1, updated_at = datetime('now') WHERE id IN (${ph})`
