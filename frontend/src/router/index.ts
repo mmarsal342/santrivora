@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useToast } from '@/composables/useToast'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -151,6 +152,32 @@ const router = createRouter({
   ]
 })
 
+type GateAwareRoute = { meta: Record<string, unknown> }
+type AuthStore = ReturnType<typeof useAuthStore>
+
+// Satu fungsi gate dipakai DUA tempat: pengecekan normal di beforeEach, DAN
+// re-cek rute yang lagi dibuka pas rekonsiliasi background nemu scope yang
+// berubah (lihat di bawah) — biar aturannya gak bisa ke-drift beda antara dua
+// pemakaian itu.
+function resolveGateRedirect(to: GateAwareRoute, auth: AuthStore): string | null {
+  const role = auth.user?.role
+  // admin-only routes (kelas, kategori, audit-log, jadwal-kegiatan)
+  if (to.meta.adminOnly && role !== 'admin') return 'dashboard'
+  // manager-only routes: admin atau kepala_asrama (kamar, users)
+  if (to.meta.managerOnly && role !== 'admin' && role !== 'kepala_asrama') return 'dashboard'
+  // tolak kyai (read-only) dari halaman mutasi data
+  if (to.meta.excludeReadOnly && auth.isReadOnly) return 'dashboard'
+  // pesan compose: kyai atau admin
+  if (to.meta.kyaiOrAdmin && role !== 'kyai' && role !== 'admin') return 'pesan'
+  // profil personel: kyai atau admin
+  if (to.meta.personelOnly && role !== 'kyai' && role !== 'admin') return 'dashboard'
+  return null
+}
+
+// Rekonsiliasi identitas dari cache cuma perlu jalan SEKALI per app-load, bukan
+// tiap navigasi — kalau tidak, tiap klik menu bakal nembak fetchMe() ulang.
+let hasReconciledCachedUser = false
+
 router.beforeEach(async (to, _from, next) => {
   const auth = useAuthStore()
 
@@ -166,33 +193,43 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   if (auth.isAuthenticated && !auth.user) {
+    // SATU-SATUNYA kasus blocking: token ada tapi belum ada identitas ter-cache
+    // sama sekali (device baru pertama kali) — gak ada apa pun buat dirender
+    // instan, jadi wajib nunggu network.
     await auth.fetchMe()
-    // If fetchMe failed (e.g. token expired + refresh failed), redirect to login
     if (!auth.isAuthenticated || !auth.user) {
       return next({ name: 'login' })
     }
+    hasReconciledCachedUser = true
+  } else if (auth.isAuthenticated && auth.user && !hasReconciledCachedUser) {
+    // Shell app render INSTAN dari identitas ter-cache (lihat stores/auth.ts) —
+    // rekonsiliasi jalan di background, TIDAK nge-block navigasi ini sama
+    // sekali. Kalau gagal karena offline, sesi ter-cache tetap dipakai apa
+    // adanya (lihat fetchMe({background:true})).
+    hasReconciledCachedUser = true
+    const prevRole = auth.user.role
+    const prevKelas = JSON.stringify(auth.user.kelas_ids)
+    const prevKamar = JSON.stringify(auth.user.kamar_ids)
+    auth.fetchMe({ background: true }).then(() => {
+      if (!auth.user) return
+      const scopeChanged =
+        auth.user.role !== prevRole ||
+        JSON.stringify(auth.user.kelas_ids) !== prevKelas ||
+        JSON.stringify(auth.user.kamar_ids) !== prevKamar
+      if (!scopeChanged) return
+      // Mutasi yang KADUNG diantri offline dari scope lama TIDAK dihapus
+      // proaktif dari outbox di sini — server sudah nge-enforce scope saat
+      // push, jadi biarkan ditolak otoritatif di sana kalau memang sudah gak
+      // valid, bukan di-preemptive-filter di client demi keamanan.
+      const redirectTo = resolveGateRedirect(to, auth)
+      if (redirectTo) router.replace({ name: redirectTo })
+      useToast().show('Akses kamu baru saja diperbarui — beberapa halaman mungkin berubah.', 'warning')
+    }).catch(() => {})
   }
 
-  const role = auth.user?.role
-  // admin-only routes (kelas, kategori, audit-log, jadwal-kegiatan)
-  if (to.meta.adminOnly && role !== 'admin') {
-    return next({ name: 'dashboard' })
-  }
-  // manager-only routes: admin atau kepala_asrama (kamar, users)
-  if (to.meta.managerOnly && role !== 'admin' && role !== 'kepala_asrama') {
-    return next({ name: 'dashboard' })
-  }
-  // tolak kyai (read-only) dari halaman mutasi data
-  if (to.meta.excludeReadOnly && auth.isReadOnly) {
-    return next({ name: 'dashboard' })
-  }
-  // pesan compose: kyai atau admin
-  if (to.meta.kyaiOrAdmin && role !== 'kyai' && role !== 'admin') {
-    return next({ name: 'pesan' })
-  }
-  // profil personel: kyai atau admin
-  if (to.meta.personelOnly && role !== 'kyai' && role !== 'admin') {
-    return next({ name: 'dashboard' })
+  const redirectTo = resolveGateRedirect(to, auth)
+  if (redirectTo) {
+    return next({ name: redirectTo })
   }
 
   next()

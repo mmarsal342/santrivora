@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "axios": "^1.18.1",
+    "dexie": "^4.4.4",
     "pinia": "^3.0.4",
     "vue": "^3.5.39",
     "vue-router": "^4.6.4"
