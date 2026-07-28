@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import { authMiddleware, requireCanMutate } from '../middleware/auth'
 import '../lib/sync/entities'
-import { pushEligibleEntityTypes } from '../lib/sync/registry'
+import { pullableEntityTypes, pushEligibleEntityTypes } from '../lib/sync/registry'
 import { processPull, processPushItem, processResolve } from '../lib/sync/engine'
 import type { ApiError, Env, UserPayload } from '../types'
 
@@ -75,20 +75,29 @@ sync.get('/pull', async (c) => {
     } as ApiError, 400)
   }
 
-  // Cursor per-entity — nama query param lama (cursor_santri/cursor_catatan)
-  // dipertahankan untuk kompatibilitas; entity baru ke depan dapet query param
-  // sendiri dengan pola yang sama begitu diperlukan konsumennya.
-  const cursors: Record<string, string | null> = {
-    santri: c.req.query('cursor_santri') ?? null,
-    catatan_disiplin: c.req.query('cursor_catatan') ?? null
+  // Cursor per-entity generik: query param `cursor_<entityType>` untuk semua
+  // entity yang terdaftar di registry. `cursor_catatan` (bukan cursor_catatan_
+  // disiplin) dipertahankan sebagai alias lama untuk kompatibilitas.
+  const entityTypes = pullableEntityTypes()
+  const cursors: Record<string, string | null> = {}
+  for (const t of entityTypes) {
+    cursors[t] = c.req.query(`cursor_${t}`) ?? null
+  }
+  if (!cursors.catatan_disiplin) {
+    cursors.catatan_disiplin = c.req.query('cursor_catatan') ?? null
   }
 
   const result = await processPull(c.env, user, since, cursors, limit)
 
+  const responseCursors: Record<string, string | null> = {}
+  for (const t of entityTypes) {
+    responseCursors[`cursor_${t}`] = result.cursors[t] ?? null
+  }
+  responseCursors.cursor_catatan = result.cursors.catatan_disiplin ?? null
+
   return c.json({
     changes: result.changes,
-    cursor_santri: result.cursors.santri ?? null,
-    cursor_catatan: result.cursors.catatan_disiplin ?? null,
+    ...responseCursors,
     has_more: result.has_more,
     server_time: result.server_time
   })
