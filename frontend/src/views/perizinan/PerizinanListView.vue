@@ -1,34 +1,50 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
-import { perizinanService, santriService } from '@/services'
 import { useAuthStore } from '@/stores/auth'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
 
 interface Santri {
   id: string
   nama_lengkap: string
-  nis?: string
+  status: string
+  kelas_id: string | null
+}
+
+interface Kelas {
+  id: string
+  nama: string
+}
+
+interface SantriOption {
+  id: string
+  nama_lengkap: string
   kelas_nama?: string
 }
 
+// diajukan_oleh_nama/disetujui_oleh_nama SENGAJA DIHILANGKAN dari tampilan —
+// alasan sama seperti dicatat_oleh_nama di catatan_disiplin/perkembangan:
+// users/personel gak pernah masuk sync cache (permanen), gak ada cara
+// resolve nama ini client-side utk semua role.
 interface Perizinan {
   id: string
   santri_id: string
-  santri_nama: string
   tanggal_keluar: string
   perkiraan_kembali: string | null
   tanggal_kembali_aktual: string | null
   alasan: string
   status: 'diajukan' | 'disetujui' | 'ditolak' | 'selesai'
-  diajukan_oleh_nama?: string
-  disetujui_oleh_nama?: string
   catatan_keputusan?: string | null
+  is_deleted?: number
 }
 
 const auth = useAuthStore()
 
-const list = ref<Perizinan[]>([])
-const loading = ref(true)
-const error = ref('')
+const { allItems: allSantri } = useEntityList<Santri>('santri')
+const { allItems: kelasList } = useEntityList<Kelas>('kelas')
+const kelasNameById = computed(() => new Map(kelasList.value.map((k) => [k.id, k.nama])))
+const santriNameById = computed(() => new Map(allSantri.value.map((s) => [s.id, s.nama_lengkap])))
+
 const activeTab = ref<'diajukan' | 'disetujui' | 'ditolak' | 'selesai' | ''>('')
 
 const tabs: { key: typeof activeTab.value; label: string }[] = [
@@ -39,23 +55,53 @@ const tabs: { key: typeof activeTab.value; label: string }[] = [
   { key: 'selesai', label: 'Selesai' }
 ]
 
+const {
+  items: list,
+  loading,
+  hasMoreLocal,
+  loadMore,
+  resetWindow
+} = useEntityList<Perizinan>('perizinan_pulang', {
+  filter: (p) => {
+    if (p.is_deleted) return false
+    if (activeTab.value && p.status !== activeTab.value) return false
+    return true
+  },
+  sort: (a, b) => b.tanggal_keluar.localeCompare(a.tanggal_keluar),
+  pageSize: 20
+})
+
+const mutation = useEntityMutation<Perizinan>('perizinan_pulang')
+const error = ref('')
+
+function switchTab(tab: typeof activeTab.value) {
+  activeTab.value = tab
+  resetWindow()
+}
+
 const canApprove = computed(() => auth.user?.role === 'admin' || auth.user?.role === 'kepala_asrama')
 
-// Ajukan modal
+// Ajukan modal — santri dari cache (aktif saja), kelas_nama di-resolve dari
+// cache kelas (dulu JOIN server via santriService.list network).
 const showAjukan = ref(false)
 const ajukanSubmitting = ref(false)
 const ajukanError = ref('')
-const santriList = ref<Santri[]>([])
 const santriSearch = ref('')
 const santriDropdownOpen = ref(false)
 const today = new Date().toISOString().slice(0, 10)
 const ajukanForm = reactive({ santri_id: '', tanggal_keluar: today, perkiraan_kembali: '', alasan: '' })
 
-const selectedSantri = computed(() => santriList.value.find((s) => s.id === ajukanForm.santri_id))
+const santriOptions = computed<SantriOption[]>(() =>
+  allSantri.value
+    .filter((s) => s.status === 'aktif')
+    .map((s) => ({ id: s.id, nama_lengkap: s.nama_lengkap, kelas_nama: s.kelas_id ? kelasNameById.value.get(s.kelas_id) : undefined }))
+)
+
+const selectedSantri = computed(() => santriOptions.value.find((s) => s.id === ajukanForm.santri_id))
 const filteredSantri = computed(() => {
-  if (!santriSearch.value) return santriList.value.slice(0, 50)
+  if (!santriSearch.value) return santriOptions.value.slice(0, 50)
   const q = santriSearch.value.toLowerCase()
-  return santriList.value.filter((s) => s.nama_lengkap.toLowerCase().includes(q) || (s.nis ?? '').toLowerCase().includes(q)).slice(0, 50)
+  return santriOptions.value.filter((s) => s.nama_lengkap.toLowerCase().includes(q)).slice(0, 50)
 })
 
 const santriDropdownRef = ref<HTMLElement | null>(null)
@@ -67,7 +113,7 @@ function handleOutsideClick(e: MouseEvent) {
 onMounted(() => document.addEventListener('click', handleOutsideClick))
 onUnmounted(() => document.removeEventListener('click', handleOutsideClick))
 
-function selectSantri(s: Santri) {
+function selectSantri(s: SantriOption) {
   ajukanForm.santri_id = s.id
   santriSearch.value = ''
   santriDropdownOpen.value = false
@@ -97,33 +143,6 @@ function formatDate(d: string | null): string {
   return new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-async function fetchList() {
-  loading.value = true
-  error.value = ''
-  try {
-    list.value = await perizinanService.list({ status: activeTab.value || undefined })
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal memuat data perizinan'
-  } finally {
-    loading.value = false
-  }
-}
-
-function switchTab(tab: typeof activeTab.value) {
-  activeTab.value = tab
-  fetchList()
-}
-
-async function fetchSantri() {
-  try {
-    const res = await santriService.list({ limit: 500, status: 'aktif' })
-    santriList.value = res.data ?? []
-  } catch {
-    santriList.value = []
-  }
-}
-
 function openAjukan() {
   ajukanError.value = ''
   ajukanForm.santri_id = ''
@@ -144,14 +163,21 @@ async function submitAjukan() {
   }
   ajukanSubmitting.value = true
   try {
-    await perizinanService.ajukan({
+    await mutation.create({
       santri_id: ajukanForm.santri_id,
       tanggal_keluar: ajukanForm.tanggal_keluar,
       perkiraan_kembali: ajukanForm.perkiraan_kembali || undefined,
-      alasan: ajukanForm.alasan
+      alasan: ajukanForm.alasan,
+      // 'status' bukan bagian createSchema backend (di-strip diam-diam sama
+      // zod, harmless — backend selalu pakai DB DEFAULT 'diajukan') TAPI
+      // tetap WAJIB disertakan di sini buat baris cache lokal optimistic:
+      // create() cuma nyimpen field yang dikirim persis apa adanya, gak ada
+      // mekanisme "isi otomatis dari DB DEFAULT" di sisi client (DEFAULT itu
+      // baru kebaca lagi setelah pull berikutnya). Tanpa ini, badge status +
+      // tombol Setujui/Tolak/Batalkan kosong sampai push berhasil sync.
+      status: 'diajukan'
     })
     showAjukan.value = false
-    await fetchList()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     ajukanError.value = err?.response?.data?.message || 'Gagal mengajukan izin'
@@ -162,8 +188,7 @@ async function submitAjukan() {
 
 async function doApprove(p: Perizinan) {
   try {
-    await perizinanService.approve(p.id)
-    await fetchList()
+    await mutation.update(p.id, { status: 'disetujui' })
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal menyetujui perizinan'
@@ -184,9 +209,8 @@ async function submitTolak() {
   }
   tolakSubmitting.value = true
   try {
-    await perizinanService.tolak(tolakTarget.value.id, tolakAlasan.value)
+    await mutation.update(tolakTarget.value.id, { status: 'ditolak', catatan_keputusan: tolakAlasan.value.trim() })
     tolakTarget.value = null
-    await fetchList()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     tolakError.value = err?.response?.data?.message || 'Gagal menolak perizinan'
@@ -197,8 +221,12 @@ async function submitTolak() {
 
 async function doKembali(p: Perizinan) {
   try {
-    await perizinanService.kembali(p.id)
-    await fetchList()
+    // Kirim tanggal hari ini EKSPLISIT dari client — beda dari REST
+    // /kembali lama yang nge-default ke server 'today' kalau field ini
+    // diomit; engine sync generik gak punya mekanisme default-if-omitted
+    // buat writeFields transisi (field yang undefined cuma di-skip dari SET,
+    // bukan di-isi otomatis), jadi client yang isi biar gak nyisa NULL.
+    await mutation.update(p.id, { status: 'selesai', tanggal_kembali_aktual: new Date().toISOString().slice(0, 10) })
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal menandai kembali'
@@ -208,18 +236,12 @@ async function doKembali(p: Perizinan) {
 async function doBatalkan(p: Perizinan) {
   if (!confirm('Batalkan pengajuan izin ini?')) return
   try {
-    await perizinanService.batalkan(p.id)
-    await fetchList()
+    await mutation.remove(p.id)
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal membatalkan perizinan'
   }
 }
-
-onMounted(() => {
-  fetchList()
-  fetchSantri()
-})
 </script>
 
 <template>
@@ -272,7 +294,7 @@ onMounted(() => {
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div class="min-w-0 flex-1">
             <div class="flex flex-wrap items-center gap-2">
-              <p class="font-semibold text-gray-900">{{ p.santri_nama }}</p>
+              <p class="font-semibold text-gray-900">{{ santriNameById.get(p.santri_id) ?? '-' }}</p>
               <span :class="['inline-flex rounded-full px-2 py-0.5 text-xs font-medium', statusBadge[p.status]]">{{ statusLabel[p.status] }}</span>
             </div>
             <p class="mt-1 text-sm text-gray-600">{{ p.alasan }}</p>
@@ -281,7 +303,6 @@ onMounted(() => {
               <span v-if="p.perkiraan_kembali"> · perkiraan kembali {{ formatDate(p.perkiraan_kembali) }}</span>
               <span v-if="p.tanggal_kembali_aktual"> · kembali {{ formatDate(p.tanggal_kembali_aktual) }}</span>
             </p>
-            <p v-if="p.diajukan_oleh_nama" class="mt-1 text-xs italic text-gray-400">Diajukan oleh {{ p.diajukan_oleh_nama }}</p>
             <p v-if="p.catatan_keputusan" class="mt-1 text-xs text-gray-500">Catatan: {{ p.catatan_keputusan }}</p>
           </div>
 
@@ -327,6 +348,16 @@ onMounted(() => {
       </div>
     </div>
 
+    <div v-if="hasMoreLocal" class="flex justify-center">
+      <button
+        type="button"
+        @click="loadMore"
+        class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
+      >
+        Muat Lebih Banyak
+      </button>
+    </div>
+
     <div
       v-if="showAjukan"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -359,7 +390,7 @@ onMounted(() => {
                   <input
                     v-model="santriSearch"
                     type="text"
-                    placeholder="Cari nama atau NIS..."
+                    placeholder="Cari nama santri..."
                     class="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     @click.stop
                   />
@@ -421,7 +452,7 @@ onMounted(() => {
     >
       <div class="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
         <h2 class="mb-1 text-lg font-semibold text-gray-900">Tolak Perizinan</h2>
-        <p class="mb-4 text-sm text-gray-500">Untuk <strong>{{ tolakTarget.santri_nama }}</strong></p>
+        <p class="mb-4 text-sm text-gray-500">Untuk <strong>{{ santriNameById.get(tolakTarget.santri_id) ?? '-' }}</strong></p>
         <div v-if="tolakError" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{{ tolakError }}</div>
         <div class="mb-4">
           <label class="mb-1 block text-sm font-medium text-gray-700">Alasan Penolakan <span class="text-red-500">*</span></label>
