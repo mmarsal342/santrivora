@@ -159,6 +159,46 @@ personel.get('/:id/catatan', async (c) => {
   return c.json({ data: result.results || [] })
 })
 
+// GET /api/personel/:id/santri-riwayat — santri yang pernah diasuh (via kamar,
+// hitung dari overlap periode riwayat_kamar_personel x riwayat_kamar_santri).
+// kelas tidak diikutkan: ustadz_kelas tidak lagi punya jalur assignment aktif
+// di aplikasi ini (legacy), jadi tidak ada apa pun untuk dilacak riwayatnya.
+personel.get('/:id/santri-riwayat', async (c) => {
+  const id = c.req.param('id')
+
+  const exists = await c.env.DB.prepare('SELECT 1 FROM users WHERE id = ?').bind(id).first()
+  if (!exists) {
+    return c.json({ error: 'Not Found', code: 'PERSONEL_NOT_FOUND', message: 'Personel tidak ditemukan.' } as ApiError, 404)
+  }
+
+  const result = await c.env.DB.prepare(
+    `SELECT
+       s.id as santri_id, s.nama_lengkap, s.status as santri_status,
+       rp.kamar_id, k.nama as kamar_nama,
+       MAX(rp.mulai_at, rks.mulai_at) as mulai_bersama,
+       CASE
+         WHEN rp.selesai_at IS NULL AND rks.selesai_at IS NULL THEN NULL
+         WHEN rp.selesai_at IS NULL THEN rks.selesai_at
+         WHEN rks.selesai_at IS NULL THEN rp.selesai_at
+         ELSE MIN(rp.selesai_at, rks.selesai_at)
+       END as selesai_bersama
+     FROM riwayat_kamar_personel rp
+     JOIN riwayat_kamar_santri rks
+       ON rks.kamar_id = rp.kamar_id
+       AND rks.mulai_at < COALESCE(rp.selesai_at, '9999-12-31')
+       AND rp.mulai_at < COALESCE(rks.selesai_at, '9999-12-31')
+     JOIN santri s ON s.id = rks.santri_id
+     JOIN kamar k ON k.id = rp.kamar_id
+     WHERE rp.user_id = ?
+     ORDER BY mulai_bersama DESC
+     LIMIT 500`
+  ).bind(id).all<{ selesai_bersama: string | null }>()
+
+  const data = (result.results || []).map((row) => ({ ...row, masih_diasuh: row.selesai_bersama === null }))
+
+  return c.json({ data })
+})
+
 // POST /api/personel/:id/catatan
 personel.post('/:id/catatan', zValidator('json', createSchema), async (c) => {
   const personelId = c.req.param('id')

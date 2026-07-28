@@ -304,6 +304,10 @@ export const personelService = {
     const response = await api.get(`/personel/${id}/catatan`)
     return response.data.data
   },
+  async santriRiwayat(id: string) {
+    const response = await api.get(`/personel/${id}/santri-riwayat`)
+    return response.data.data
+  },
   async createCatatan(id: string, data: { tanggal: string; kategori: string; judul: string; catatan?: string }) {
     const response = await api.post(`/personel/${id}/catatan`, data)
     return response.data.data

@@ -34,6 +34,15 @@ interface CatatanPersonel {
   catatan: string | null
   dicatat_oleh_nama?: string
 }
+interface SantriRiwayat {
+  santri_id: string
+  nama_lengkap: string
+  santri_status: string
+  kamar_nama: string
+  mulai_bersama: string
+  selesai_bersama: string | null
+  masih_diasuh: boolean
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -41,10 +50,13 @@ const id = route.params.id as string
 
 const profil = ref<Profil | null>(null)
 const catatanList = ref<CatatanPersonel[]>([])
+const santriRiwayat = ref<SantriRiwayat[]>([])
 const loading = ref(true)
 const loadingCatatan = ref(false)
+const loadingRiwayat = ref(false)
 const error = ref('')
 const catatanError = ref('')
+const riwayatError = ref('')
 
 const showModal = ref(false)
 const saving = ref(false)
@@ -113,6 +125,19 @@ async function loadCatatan() {
   }
 }
 
+async function loadSantriRiwayat() {
+  loadingRiwayat.value = true
+  riwayatError.value = ''
+  try {
+    santriRiwayat.value = await personelService.santriRiwayat(id)
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    riwayatError.value = err?.response?.data?.message || 'Gagal memuat riwayat santri yang diasuh'
+  } finally {
+    loadingRiwayat.value = false
+  }
+}
+
 function openModal() {
   form.value = { tanggal: today, kategori: 'Kinerja', judul: '', catatan: '' }
   catatanError.value = ''
@@ -153,9 +178,15 @@ async function removeCatatan(catatanId: string) {
   }
 }
 
+function formatDateTimeShort(d: string | null): string {
+  if (!d) return '-'
+  return new Date(d.replace(' ', 'T') + 'Z').toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
 onMounted(() => {
   loadProfil()
   loadCatatan()
+  loadSantriRiwayat()
 })
 </script>
 
@@ -286,6 +317,41 @@ onMounted(() => {
             v-else
             title="Belum ada catatan personel"
             description="Catatan kinerja, kehadiran, atau keputusan kyai akan muncul di sini."
+          />
+        </div>
+      </section>
+
+      <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-100 px-5 py-4">
+          <h2 class="text-base font-semibold text-slate-900">Santri yang Pernah Diasuh</h2>
+          <p class="mt-0.5 text-xs text-slate-500">Berdasarkan riwayat penempatan kamar — mulai tercatat sejak fitur ini dirilis</p>
+        </div>
+
+        <div class="p-5">
+          <div v-if="riwayatError" class="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ riwayatError }}</div>
+
+          <div v-if="loadingRiwayat" class="space-y-2">
+            <div v-for="i in 3" :key="i" class="h-12 animate-pulse rounded-lg bg-slate-100"></div>
+          </div>
+
+          <div v-else-if="santriRiwayat.length" class="divide-y divide-slate-100">
+            <div v-for="r in santriRiwayat" :key="r.santri_id + r.mulai_bersama" class="flex flex-wrap items-center justify-between gap-2 py-3">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium text-slate-800">{{ r.nama_lengkap }}</p>
+                <p class="text-xs text-slate-400">{{ r.kamar_nama }} · {{ formatDateTimeShort(r.mulai_bersama) }} – {{ r.selesai_bersama ? formatDateTimeShort(r.selesai_bersama) : 'sekarang' }}</p>
+              </div>
+              <span
+                v-if="r.masih_diasuh"
+                class="inline-flex shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
+              >Masih diasuh</span>
+              <span v-else class="inline-flex shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">Riwayat</span>
+            </div>
+          </div>
+
+          <EmptyState
+            v-else
+            title="Belum ada riwayat"
+            description="Santri yang pernah/masih diasuh lewat penempatan kamar akan muncul di sini."
           />
         </div>
       </section>

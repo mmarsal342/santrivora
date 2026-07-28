@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import { authMiddleware, requireCanMutate } from '../middleware/auth'
 import { resolveKamarScope, canAccessKamar } from '../lib/scope'
+import { recordSantriKamarChange, closeSantriKamarHistory } from '../lib/riwayatKamar'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const santri = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -263,6 +264,8 @@ santri.post('/', requireCanMutate(), zValidator('json', createSchema), async (c)
      VALUES (?, ?, 'santri.create', 'santri', ?, ?)`
   ).bind(crypto.randomUUID(), user.sub, id, JSON.stringify(data)).run()
 
+  await recordSantriKamarChange(c.env, id, null, data.kamar_id || null)
+
   const result = await c.env.DB.prepare('SELECT * FROM santri WHERE id = ?').bind(id).first()
   return c.json({ message: 'Santri berhasil ditambahkan.', data: result }, 201)
 })
@@ -369,6 +372,9 @@ santri.put('/:id', requireCanMutate(), zValidator('json', updateSchema), async (
      VALUES (?, ?, 'santri.update', 'santri', ?, ?, ?)`
   ).bind(crypto.randomUUID(), user.sub, santriId, JSON.stringify(existing), JSON.stringify(data)).run()
 
+  const newKamarId = data.kamar_id !== undefined ? data.kamar_id : existing.kamar_id
+  await recordSantriKamarChange(c.env, santriId, existing.kamar_id, newKamarId)
+
   const result = await c.env.DB.prepare('SELECT * FROM santri WHERE id = ?').bind(santriId).first()
   return c.json({ message: 'Data santri berhasil diperbarui.', data: result })
 })
@@ -416,6 +422,8 @@ santri.delete('/:id', requireCanMutate(), async (c) => {
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id)
      VALUES (?, ?, 'santri.delete', 'santri', ?)`
   ).bind(crypto.randomUUID(), user.sub, santriId).run()
+
+  await closeSantriKamarHistory(c.env, santriId!)
 
   return c.json({ message: 'Santri berhasil dikeluarkan (status: keluar).' })
 })
@@ -504,6 +512,7 @@ santri.post('/bulk', requireCanMutate(), zValidator('json', bulkSchema), async (
         s.kelas_id || null, s.kamar_id || null, s.angkatan || null, s.tanggal_masuk || null,
         s.foto_url || null, s.tanggal_lahir || null, s.love_language || null
       ).run()
+      await recordSantriKamarChange(c.env, id, null, s.kamar_id || null)
       results.push({ row, status: 'created', id })
     } catch (err: any) {
       results.push({ row, status: 'error', error: err.message || 'UNKNOWN_ERROR' })
