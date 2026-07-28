@@ -365,17 +365,17 @@ export async function processPushItem(env: Env, item: PushItem, user: UserPayloa
 interface ScopeClauseResult { empty: boolean; clause: string; params: unknown[] }
 
 async function computeDirectScopeClause(
-  env: Env, user: UserPayload, kelasCol: string, kamarCol: string
+  env: Env, user: UserPayload, kelasCol: string | null, kamarCol: string | null
 ): Promise<ScopeClauseResult> {
   if (user.role === 'admin' || user.role === 'kyai') return { empty: false, clause: '', params: [] }
   const scopedKamarIds = await resolveKamarScope(env, user)
   const parts: string[] = []
   const params: unknown[] = []
-  if (user.role === 'ustadz' && user.kelas_ids.length > 0) {
+  if (kelasCol && user.role === 'ustadz' && user.kelas_ids.length > 0) {
     parts.push(`${kelasCol} IN (${user.kelas_ids.map(() => '?').join(',')})`)
     params.push(...user.kelas_ids)
   }
-  if (scopedKamarIds && scopedKamarIds.length > 0) {
+  if (kamarCol && scopedKamarIds && scopedKamarIds.length > 0) {
     parts.push(`${kamarCol} IN (${scopedKamarIds.map(() => '?').join(',')})`)
     params.push(...scopedKamarIds)
   }
@@ -400,9 +400,9 @@ async function pullEntity(
   let scopeParams: unknown[] = []
 
   if (config.scope.kind === 'direct-kamar-kelas') {
-    const kelasCol = config.scope.kelasColumn ?? 'kelas_id'
-    const kamarCol = config.scope.kamarColumn ?? 'kamar_id'
-    const r = await computeDirectScopeClause(env, user, `${config.table}.${kelasCol}`, `${config.table}.${kamarCol}`)
+    const kelasCol = config.scope.kelasColumn === null ? null : `${config.table}.${config.scope.kelasColumn ?? 'kelas_id'}`
+    const kamarCol = config.scope.kamarColumn === null ? null : `${config.table}.${config.scope.kamarColumn ?? 'kamar_id'}`
+    const r = await computeDirectScopeClause(env, user, kelasCol, kamarCol)
     if (r.empty) return { rows: [], nextCursor: null }
     scopeClause = r.clause
     scopeParams = r.params

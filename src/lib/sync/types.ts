@@ -11,7 +11,12 @@ export type SyncCapability = 'full' | 'pull-only' | 'none'
  */
 export type ScopeRule =
   | { kind: 'global' }
-  | { kind: 'direct-kamar-kelas'; kelasColumn?: string; kamarColumn?: string }
+  // kelasColumn/kamarColumn: undefined -> default 'kelas_id'/'kamar_id' (kolom
+  // ADA di tabel entity, cuma pakai nama default). null -> dimensi itu MEMANG
+  // TIDAK ADA sama sekali di entity ini (mis. tabel kelas tidak punya kolom
+  // kamar_id) — beda dari undefined, supaya tidak salah bikin SQL merujuk
+  // kolom yang tidak exist.
+  | { kind: 'direct-kamar-kelas'; kelasColumn?: string | null; kamarColumn?: string | null }
   | { kind: 'via-santri'; santriIdColumn: string }
   | { kind: 'role-only'; roles: Role[] }
   | { kind: 'custom'; check: (env: Env, user: UserPayload, row: Record<string, unknown>) => Promise<boolean> }
