@@ -118,7 +118,10 @@ async function processCreate(env: Env, config: EntitySyncConfig, item: PushItem,
     }
   }
 
-  if (config.scope.kind === 'direct-kamar-kelas') {
+  if (config.customCreateCheck) {
+    const err = await config.customCreateCheck(env, user, data)
+    if (err) return { local_id: item.local_id, status: 'error', error: err }
+  } else if (config.scope.kind === 'direct-kamar-kelas') {
     const targetScopeErr = await checkTargetScopeRule(env, user, config.targetScope ?? config.scope, data)
     if (targetScopeErr) return { local_id: item.local_id, status: 'error', error: targetScopeErr }
   } else if (config.scope.kind === 'via-santri') {
@@ -136,7 +139,8 @@ async function processCreate(env: Env, config: EntitySyncConfig, item: PushItem,
     // 'custom' / 'role-only' / 'global' — entity tanpa kelas_id/kamar_id sendiri
     // dan tanpa konsep "target" (mis. absensi: akses ditentukan lewat santri_id
     // yang dituju, bukan lewat sesuatu yang sedang "dipindah").
-    if (!(await checkScopeRule(env, user, config.scope, data))) {
+    const rule = config.targetScope ?? config.scope
+    if (!(await checkScopeRule(env, user, rule, data))) {
       return { local_id: item.local_id, status: 'error', error: config.scopeDeniedCode }
     }
   }
@@ -151,8 +155,14 @@ async function processCreate(env: Env, config: EntitySyncConfig, item: PushItem,
   const newId = serverId || crypto.randomUUID()
   const createCols = config.createColumns ?? config.writableColumns
   const extra = config.createExtra ? config.createExtra(data, user) : {}
-  const colNames = [idCol, ...createCols, ...Object.keys(extra), 'version']
-  const values = [newId, ...createCols.map((c) => (data[c] !== undefined ? data[c] : null)), ...Object.values(extra), 1]
+  // Kolom yang NILAINYA undefined (client tidak mengirim field itu sama sekali)
+  // DIOMIT dari INSERT, bukan dipaksa NULL — supaya DEFAULT kolom di DB (mis.
+  // jadwal_kegiatan.urutan DEFAULT 0, santri.status DEFAULT 'aktif') yang
+  // berlaku. Field yang eksplisit dikirim `null` oleh client tetap disimpan
+  // sebagai NULL (beda dari "tidak dikirim sama sekali").
+  const presentCols = createCols.filter((c) => data[c] !== undefined)
+  const colNames = [idCol, ...presentCols, ...Object.keys(extra), 'version']
+  const values = [newId, ...presentCols.map((c) => data[c]), ...Object.values(extra), 1]
   const placeholders = colNames.map(() => '?').join(', ')
   await env.DB.prepare(`INSERT INTO ${config.table} (${colNames.join(', ')}) VALUES (${placeholders})`).bind(...values).run()
 
@@ -184,11 +194,15 @@ async function processNaturalKeyUpsert(
 
   const createCols = config.createColumns ?? config.writableColumns
   const extra = config.createExtra ? config.createExtra(data, user) : {}
-  const setCols = [...createCols, ...Object.keys(extra)]
-  const setValues = [...createCols.map((c) => (data[c] !== undefined ? data[c] : null)), ...Object.values(extra)]
+  // Sama seperti processCreate: kolom yang undefined DIOMIT (bukan dipaksa
+  // NULL) supaya DEFAULT kolom di DB tetap berlaku kalau client tidak
+  // mengirimkannya.
+  const presentCols = createCols.filter((c) => data[c] !== undefined)
+  const setValues = [...presentCols.map((c) => data[c]), ...Object.values(extra)]
 
   if (existing) {
     const targetId = existing[idCol] as string
+    const setCols = [...presentCols, ...Object.keys(extra)]
     const sets = setCols.map((c) => `${c} = ?`).join(', ')
     await env.DB.prepare(
       `UPDATE ${config.table} SET ${sets}, version = version + 1, updated_at = datetime('now') WHERE ${idCol} = ?`
@@ -199,7 +213,7 @@ async function processNaturalKeyUpsert(
   }
 
   const newId = (data.id as string | undefined) || crypto.randomUUID()
-  const colNames = [idCol, ...setCols, 'version']
+  const colNames = [idCol, ...presentCols, ...Object.keys(extra), 'version']
   const placeholders = colNames.map(() => '?').join(', ')
   await env.DB.prepare(`INSERT INTO ${config.table} (${colNames.join(', ')}) VALUES (${placeholders})`).bind(newId, ...setValues, 1).run()
   if (config.afterWrite) await config.afterWrite(env, 'create', newId, null, { ...data, ...extra, id: newId })
@@ -220,10 +234,19 @@ async function processUpdate(env: Env, config: EntitySyncConfig, item: PushItem,
   if (!current) return { local_id: item.local_id, status: 'error', error: 'Record not found on server' }
 
   const transition = config.transitions?.find((t) => patch[t.field] !== undefined && patch[t.field] === t.to)
-  const effectiveScope = transition ? transition.scope : config.scope
+  const effectiveScope = transition ? transition.scope : (config.writeScope ?? config.scope)
 
-  if (!(await checkScopeRule(env, user, effectiveScope, current))) {
-    return { local_id: item.local_id, status: 'error', error: config.scopeDeniedCode }
+  let scopeOk: boolean
+  let scopeErrCode = config.scopeDeniedCode
+  if (!transition && config.customWriteCheck) {
+    const err = await config.customWriteCheck(env, user, current)
+    scopeOk = !err
+    scopeErrCode = err ?? config.scopeDeniedCode
+  } else {
+    scopeOk = await checkScopeRule(env, user, effectiveScope, current)
+  }
+  if (!scopeOk) {
+    return { local_id: item.local_id, status: 'error', error: scopeErrCode }
   }
 
   // Target-scope re-check hanya berlaku untuk entity yang punya kelas_id/kamar_id
@@ -292,7 +315,10 @@ async function processDelete(env: Env, config: EntitySyncConfig, item: PushItem,
   const current = await fetchCurrentForWrite(env, config, serverId)
   if (!current) return { local_id: item.local_id, status: 'error', error: 'Record not found on server' }
 
-  if (!(await checkScopeRule(env, user, config.scope, current))) {
+  if (config.customWriteCheck) {
+    const err = await config.customWriteCheck(env, user, current)
+    if (err) return { local_id: item.local_id, status: 'error', error: err }
+  } else if (!(await checkScopeRule(env, user, config.writeScope ?? config.scope, current))) {
     return { local_id: item.local_id, status: 'error', error: config.scopeDeniedCode }
   }
 
@@ -527,7 +553,10 @@ export async function processResolve(env: Env, user: UserPayload, conflictId: st
         return { status: 404, body: { error: 'Not Found', code: config.notFoundCode, message: 'Data tidak ditemukan.' } }
       }
 
-      if (!(await checkScopeRule(env, user, config.scope, current))) {
+      if (config.customWriteCheck) {
+        const err = await config.customWriteCheck(env, user, current)
+        if (err) return { status: 403, body: { error: 'Forbidden', code: err, message: 'Anda tidak memiliki akses ke data ini.' } }
+      } else if (!(await checkScopeRule(env, user, config.writeScope ?? config.scope, current))) {
         return { status: 403, body: { error: 'Forbidden', code: config.scopeDeniedCode, message: 'Anda tidak memiliki akses ke data ini.' } }
       }
 
