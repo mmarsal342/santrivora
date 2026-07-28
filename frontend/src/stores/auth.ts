@@ -15,8 +15,21 @@ interface User {
   assigned_kamar?: Array<{ id: string; nama: string; jenis_kelamin: 'L' | 'P'; kapasitas?: number }>
 }
 
+function loadCachedUser(): User | null {
+  const raw = localStorage.getItem('cached_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as User
+  } catch {
+    return null
+  }
+}
+
 export const useAuthStore = defineStore('auth', () => {
-  const user = ref<User | null>(null)
+  // Diseed dari cache biar shell app (sidebar/topbar/role-gate) bisa render
+  // INSTAN begitu app dibuka, tanpa nunggu network — fetchMe() di router
+  // jalan di background buat rekonsiliasi (lihat router/index.ts).
+  const user = ref<User | null>(loadCachedUser())
   const token = ref<string | null>(localStorage.getItem('access_token'))
   const loading = ref(false)
 
@@ -43,20 +56,30 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = data.user
       localStorage.setItem('access_token', data.access_token)
       localStorage.setItem('refresh_token', data.refresh_token)
+      localStorage.setItem('cached_user', JSON.stringify(data.user))
       return data
     } finally {
       loading.value = false
     }
   }
 
-  async function fetchMe() {
+  /**
+   * `background: true` dipakai router pas auth.user sudah keisi dari cache
+   * (bukan blocking cold-start) — kalau gagal karena OFFLINE (bukan server
+   * benar-benar menolak), sesi ter-cache TETAP dipakai, tidak logout paksa.
+   * Ini yang bikin app tetap bisa dibuka read-only offline walau reconciliation
+   * background-nya gagal karena gak ada koneksi.
+   */
+  async function fetchMe(opts: { background?: boolean } = {}) {
     if (!token.value) return null
     try {
       const data = await authService.getMe()
       user.value = data
+      localStorage.setItem('cached_user', JSON.stringify(data))
       return data
-    } catch {
-      logout()
+    } catch (err) {
+      const hasServerResponse = !!(err as { response?: unknown })?.response
+      if (hasServerResponse || !opts.background) logout()
       return null
     }
   }
@@ -69,6 +92,7 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
+    localStorage.removeItem('cached_user')
   }
 
   return {
