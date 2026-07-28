@@ -20,15 +20,24 @@ const updateSchema = createSchema.partial().extend({
 })
 
 // GET /api/kamar — admin/kyai: semua; kepala_asrama: asramanya; ustadz: yang dipegang
+// status: 'aktif' (default, cocok dengan tombol "Hapus" di UI yang sebenarnya cuma
+// menonaktifkan) | 'nonaktif' | 'semua'. Sebelumnya endpoint ini SAMA SEKALI tidak
+// filter is_active, jadi kamar yang sudah "dihapus" (dinonaktifkan) tetap muncul
+// selamanya di daftar — persis keluhan "kamar gak bisa ngilang".
 kamar.get('/', async (c) => {
   const user = c.get('user')
+  const status = c.req.query('status')
+  const activeClause = status === 'semua' ? '' : status === 'nonaktif' ? 'k.is_active = 0' : 'k.is_active = 1'
+
   const scopedKamarIds = await resolveKamarScope(c.env, user)
 
   if (scopedKamarIds === null) {
+    const where = activeClause ? `WHERE ${activeClause}` : ''
     const dbResult = await c.env.DB.prepare(`
       SELECT k.*, COUNT(s.id) as jumlah_santri
       FROM kamar k
       LEFT JOIN santri s ON s.kamar_id = k.id AND s.status = 'aktif'
+      ${where}
       GROUP BY k.id
       ORDER BY k.jenis_kelamin ASC, k.nama ASC
     `).all()
@@ -38,11 +47,13 @@ kamar.get('/', async (c) => {
   if (scopedKamarIds.length === 0) return c.json({ data: [] })
 
   const placeholders = scopedKamarIds.map(() => '?').join(',')
+  const where = ['k.id IN (' + placeholders + ')']
+  if (activeClause) where.push(activeClause)
   const dbResult = await c.env.DB.prepare(`
     SELECT k.*, COUNT(s.id) as jumlah_santri
     FROM kamar k
     LEFT JOIN santri s ON s.kamar_id = k.id AND s.status = 'aktif'
-    WHERE k.id IN (${placeholders})
+    WHERE ${where.join(' AND ')}
     GROUP BY k.id
     ORDER BY k.jenis_kelamin ASC, k.nama ASC
   `).bind(...scopedKamarIds).all()

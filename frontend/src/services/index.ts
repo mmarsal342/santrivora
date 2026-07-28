@@ -76,8 +76,8 @@ export const adminService = {
 }
 
 export const kamarService = {
-  async list() {
-    const response = await api.get('/kamar')
+  async list(params?: { status?: 'aktif' | 'nonaktif' | 'semua' }) {
+    const response = await api.get('/kamar', { params })
     return response.data.data
   },
   async get(id: string) {

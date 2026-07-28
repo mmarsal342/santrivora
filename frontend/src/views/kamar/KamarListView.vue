@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { kamarService } from '@/services'
 import EmptyState from '@/components/EmptyState.vue'
 
@@ -20,17 +20,20 @@ const editingId = ref<string | null>(null)
 const submitting = ref(false)
 const deleteTarget = ref<Kamar | null>(null)
 const deleteWarning = ref('')
+const filterStatus = ref<'aktif' | 'nonaktif' | 'semua'>('aktif')
 
 const form = reactive({
   nama: '',
   jenis_kelamin: 'L' as 'L' | 'P',
-  kapasitas: '' as string | number
+  kapasitas: '' as string | number,
+  is_active: true
 })
 
 function resetForm() {
   form.nama = ''
   form.jenis_kelamin = 'L'
   form.kapasitas = ''
+  form.is_active = true
   editingId.value = null
 }
 
@@ -38,7 +41,7 @@ async function fetchList() {
   loading.value = true
   error.value = ''
   try {
-    list.value = (await kamarService.list()) as Kamar[]
+    list.value = (await kamarService.list({ status: filterStatus.value })) as Kamar[]
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal memuat kamar'
@@ -46,6 +49,8 @@ async function fetchList() {
     loading.value = false
   }
 }
+
+watch(filterStatus, fetchList)
 
 function openCreate() {
   error.value = ''
@@ -59,6 +64,7 @@ function openEdit(k: Kamar) {
   form.nama = k.nama
   form.jenis_kelamin = k.jenis_kelamin
   form.kapasitas = k.kapasitas ?? ''
+  form.is_active = k.is_active !== 0
   modalOpen.value = true
 }
 
@@ -75,6 +81,7 @@ async function submit() {
     }
     if (form.kapasitas !== '') payload.kapasitas = Number(form.kapasitas)
     if (editingId.value) {
+      payload.is_active = form.is_active ? 1 : 0
       await kamarService.update(editingId.value, payload)
     } else {
       await kamarService.create(payload as { nama: string; jenis_kelamin: 'L' | 'P'; kapasitas?: number })
@@ -120,13 +127,23 @@ onMounted(fetchList)
         <h1 class="text-2xl font-bold text-gray-900">Manajemen Kamar</h1>
         <p class="text-sm text-gray-500">Kelola data kamar pondok</p>
       </div>
-      <button
-        type="button"
-        @click="openCreate"
-        class="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
-      >
-        + Tambah Kamar
-      </button>
+      <div class="flex flex-wrap items-center gap-2">
+        <select
+          v-model="filterStatus"
+          class="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+        >
+          <option value="aktif">Aktif</option>
+          <option value="nonaktif">Nonaktif</option>
+          <option value="semua">Semua</option>
+        </select>
+        <button
+          type="button"
+          @click="openCreate"
+          class="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
+        >
+          + Tambah Kamar
+        </button>
+      </div>
     </div>
 
     <div v-if="error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -261,6 +278,10 @@ onMounted(fetchList)
               class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
             />
           </div>
+          <label v-if="editingId" class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition hover:bg-gray-50">
+            <input v-model="form.is_active" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
+            <span class="text-sm text-gray-700">Kamar aktif</span>
+          </label>
           <div class="flex gap-3 pt-2">
             <button
               type="submit"
