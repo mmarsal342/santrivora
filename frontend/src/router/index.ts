@@ -108,6 +108,11 @@ const router = createRouter({
           meta: { managerOnly: true }
         },
         {
+          path: 'perizinan',
+          name: 'perizinan',
+          component: () => import('@/views/perizinan/PerizinanListView.vue')
+        },
+        {
           path: 'personel',
           name: 'personel',
           component: () => import('@/views/personel/PersonelListView.vue'),
