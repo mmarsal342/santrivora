@@ -68,6 +68,12 @@ const navItems: readonly NavItem[] = [
     icon: ['M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z']
   },
   {
+    name: 'perizinan',
+    label: 'Perizinan Pulang',
+    to: '/perizinan',
+    icon: ['M15.75 5.25a3 3 0 013 3v10.5a3 3 0 01-3 3h-7.5a3 3 0 01-3-3V15m9-9.75v2.25M8.25 5.25v2.25M12 13.5h6.75m-6.75 3h6.75M12 13.5h.008v.008H12V13.5z']
+  },
+  {
     name: 'jadwal-kegiatan',
     label: 'Jadwal Kegiatan Rutin',
     to: '/jadwal-kegiatan',

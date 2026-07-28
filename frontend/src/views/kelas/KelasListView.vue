@@ -20,6 +20,12 @@ const submitting = ref(false)
 const deleteTarget = ref<Kelas | null>(null)
 const deleteWarning = ref('')
 
+const naikkanTarget = ref<Kelas | null>(null)
+const naikkanSubmitting = ref(false)
+const naikkanError = ref('')
+const naikkanResult = ref('')
+const naikkanForm = reactive<{ mode: 'naik' | 'lulus'; target_kelas_id: string }>({ mode: 'naik', target_kelas_id: '' })
+
 const form = reactive({
   nama: '',
   tingkatan: '',
@@ -109,6 +115,37 @@ async function doDelete() {
   }
 }
 
+function openNaikkan(k: Kelas) {
+  naikkanError.value = ''
+  naikkanResult.value = ''
+  naikkanForm.mode = 'naik'
+  naikkanForm.target_kelas_id = ''
+  naikkanTarget.value = k
+}
+
+async function submitNaikkan() {
+  if (!naikkanTarget.value) return
+  if (naikkanForm.mode === 'naik' && !naikkanForm.target_kelas_id) {
+    naikkanError.value = 'Pilih kelas tujuan'
+    return
+  }
+  naikkanSubmitting.value = true
+  naikkanError.value = ''
+  try {
+    const res = await kelasService.naikkan(naikkanTarget.value.id, {
+      lulus: naikkanForm.mode === 'lulus',
+      target_kelas_id: naikkanForm.mode === 'naik' ? naikkanForm.target_kelas_id : undefined
+    })
+    naikkanResult.value = res.message || 'Berhasil diproses.'
+    await fetchList()
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    naikkanError.value = err?.response?.data?.message || 'Gagal memproses kenaikan kelas'
+  } finally {
+    naikkanSubmitting.value = false
+  }
+}
+
 onMounted(fetchList)
 </script>
 
@@ -179,6 +216,16 @@ onMounted(fetchList)
                 </span>
               </td>
               <td class="whitespace-nowrap px-4 py-3 text-right">
+                <button
+                  type="button"
+                  @click="openNaikkan(k)"
+                  class="mr-1 rounded-md p-1.5 text-emerald-600 transition hover:bg-emerald-50"
+                  title="Naikkan Kelas"
+                >
+                  <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
+                  </svg>
+                </button>
                 <button
                   type="button"
                   @click="openEdit(k)"
@@ -261,6 +308,62 @@ onMounted(fetchList)
             </button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <div
+      v-if="naikkanTarget"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      @click.self="naikkanTarget = null"
+    >
+      <div class="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <h2 class="mb-1 text-lg font-semibold text-gray-900">Naikkan Kelas</h2>
+        <p class="mb-4 text-sm text-gray-500">
+          Berlaku untuk semua santri aktif di <strong>{{ naikkanTarget.nama }}</strong>
+          ({{ naikkanTarget.jumlah_santri ?? 0 }} santri). Kamar tidak ikut berubah.
+        </p>
+        <div v-if="naikkanError" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{{ naikkanError }}</div>
+        <div v-if="naikkanResult" class="mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700">{{ naikkanResult }}</div>
+
+        <div class="mb-4 space-y-2">
+          <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition hover:bg-gray-50">
+            <input v-model="naikkanForm.mode" type="radio" value="naik" class="h-4 w-4 text-emerald-600" />
+            <span class="text-sm font-medium text-gray-700">Naik ke kelas lain</span>
+          </label>
+          <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 p-3 transition hover:bg-gray-50">
+            <input v-model="naikkanForm.mode" type="radio" value="lulus" class="h-4 w-4 text-emerald-600" />
+            <span class="text-sm font-medium text-gray-700">Luluskan (status jadi Lulus)</span>
+          </label>
+        </div>
+
+        <div v-if="naikkanForm.mode === 'naik'" class="mb-4">
+          <label class="mb-1 block text-sm font-medium text-gray-700">Kelas Tujuan</label>
+          <select
+            v-model="naikkanForm.target_kelas_id"
+            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+          >
+            <option value="" disabled>Pilih kelas tujuan</option>
+            <option v-for="k in list.filter((x) => x.id !== naikkanTarget?.id)" :key="k.id" :value="k.id">{{ k.nama }}</option>
+          </select>
+        </div>
+
+        <div class="flex gap-3">
+          <button
+            type="button"
+            :disabled="naikkanSubmitting"
+            @click="submitNaikkan"
+            class="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {{ naikkanSubmitting ? 'Memproses...' : 'Proses' }}
+          </button>
+          <button
+            type="button"
+            @click="naikkanTarget = null"
+            class="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+          >
+            Tutup
+          </button>
+        </div>
       </div>
     </div>
 

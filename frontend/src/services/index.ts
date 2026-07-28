@@ -207,6 +207,10 @@ export const kelasService = {
   },
   async remove(id: string) {
     await api.delete(`/kelas/${id}`)
+  },
+  async naikkan(id: string, data: { lulus: boolean; target_kelas_id?: string; santri_ids?: string[] }) {
+    const response = await api.post(`/kelas/${id}/naikkan`, data)
+    return response.data
   }
 }
 
@@ -318,6 +322,36 @@ export const personelService = {
   },
   async removeCatatan(catatanId: string) {
     await api.delete(`/personel/catatan/${catatanId}`)
+  }
+}
+
+export const perizinanService = {
+  async list(params?: { santri_id?: string; status?: string }) {
+    const response = await api.get('/perizinan', { params })
+    return response.data.data
+  },
+  async ajukan(data: { santri_id: string; tanggal_keluar: string; perkiraan_kembali?: string; alasan: string }) {
+    const response = await api.post('/perizinan', data)
+    return response.data.data
+  },
+  async update(id: string, data: Record<string, unknown>) {
+    const response = await api.put(`/perizinan/${id}`, data)
+    return response.data.data
+  },
+  async batalkan(id: string) {
+    await api.delete(`/perizinan/${id}`)
+  },
+  async approve(id: string, catatan_keputusan?: string) {
+    const response = await api.post(`/perizinan/${id}/approve`, { catatan_keputusan })
+    return response.data.data
+  },
+  async tolak(id: string, catatan_keputusan: string) {
+    const response = await api.post(`/perizinan/${id}/tolak`, { catatan_keputusan })
+    return response.data.data
+  },
+  async kembali(id: string, tanggal_kembali_aktual?: string) {
+    const response = await api.post(`/perizinan/${id}/kembali`, { tanggal_kembali_aktual })
+    return response.data.data
   }
 }
 

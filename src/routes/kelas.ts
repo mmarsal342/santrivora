@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import { authMiddleware } from '../middleware/auth'
+import { closeSantriKamarHistory } from '../lib/riwayatKamar'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const kelas = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -16,6 +17,15 @@ const createSchema = z.object({
 
 const updateSchema = createSchema.partial().extend({
   is_active: z.number().int().optional()
+})
+
+const naikkanSchema = z.object({
+  lulus: z.boolean(),
+  target_kelas_id: z.string().uuid().optional(),
+  santri_ids: z.array(z.string().uuid()).optional()
+}).refine((data) => data.lulus || !!data.target_kelas_id, {
+  message: 'target_kelas_id wajib diisi kalau bukan kelulusan',
+  path: ['target_kelas_id']
 })
 
 // GET /api/kelas — admin: semua, ustadz: yang dipegang
@@ -172,6 +182,102 @@ kelas.delete('/:id', requireAdmin, async (c) => {
   ).bind(crypto.randomUUID(), user.sub, id).run()
 
   return c.json({ message: 'Kelas berhasil dinonaktifkan.' })
+})
+
+// POST /api/kelas/:id/naikkan — kenaikan kelas massal (admin only).
+// Cuma mengubah kelas_id (atau status jadi 'lulus') — kamar_id sengaja TIDAK
+// disentuh sama sekali, karena pindah kamar sudah punya alur sendiri
+// (santri.ts) dan tidak selalu terjadi bersamaan dengan naik kelas.
+kelas.post('/:id/naikkan', requireAdmin, zValidator('json', naikkanSchema), async (c) => {
+  const sourceKelasId = c.req.param('id')
+  const { lulus, target_kelas_id, santri_ids } = c.req.valid('json')
+  const user = c.get('user')
+
+  const source = await c.env.DB.prepare('SELECT id FROM kelas WHERE id = ?').bind(sourceKelasId).first()
+  if (!source) {
+    return c.json({
+      error: 'Not Found',
+      code: 'KELAS_NOT_FOUND',
+      message: 'Kelas asal tidak ditemukan.'
+    } as ApiError, 404)
+  }
+
+  if (!lulus) {
+    if (target_kelas_id === sourceKelasId) {
+      return c.json({
+        error: 'Bad Request',
+        code: 'TARGET_SAME_AS_SOURCE',
+        message: 'Kelas tujuan tidak boleh sama dengan kelas asal.'
+      } as ApiError, 400)
+    }
+    const target = await c.env.DB.prepare('SELECT id FROM kelas WHERE id = ? AND is_active = 1').bind(target_kelas_id).first()
+    if (!target) {
+      return c.json({
+        error: 'Bad Request',
+        code: 'TARGET_KELAS_NOT_FOUND',
+        message: 'Kelas tujuan tidak ditemukan atau tidak aktif.'
+      } as ApiError, 400)
+    }
+  }
+
+  let santriRows: Array<{ id: string }>
+  if (santri_ids && santri_ids.length > 0) {
+    const ph = santri_ids.map(() => '?').join(',')
+    const rows = await c.env.DB.prepare(
+      `SELECT id FROM santri WHERE id IN (${ph}) AND kelas_id = ? AND status = 'aktif'`
+    ).bind(...santri_ids, sourceKelasId).all<{ id: string }>()
+    santriRows = rows.results || []
+    if (santriRows.length !== santri_ids.length) {
+      return c.json({
+        error: 'Bad Request',
+        code: 'SANTRI_IDS_INVALID',
+        message: 'Beberapa santri_id tidak valid, bukan santri aktif, atau bukan di kelas asal ini.'
+      } as ApiError, 400)
+    }
+  } else {
+    const rows = await c.env.DB.prepare(
+      `SELECT id FROM santri WHERE kelas_id = ? AND status = 'aktif'`
+    ).bind(sourceKelasId).all<{ id: string }>()
+    santriRows = rows.results || []
+  }
+
+  if (santriRows.length === 0) {
+    return c.json({ message: 'Tidak ada santri aktif untuk diproses.', data: { count: 0, santri_ids: [] } })
+  }
+
+  const ids = santriRows.map((r) => r.id)
+  const ph = ids.map(() => '?').join(',')
+
+  if (lulus) {
+    await c.env.DB.prepare(
+      `UPDATE santri SET status = 'lulus', version = version + 1, updated_at = datetime('now') WHERE id IN (${ph})`
+    ).bind(...ids).run()
+    for (const santriId of ids) {
+      await closeSantriKamarHistory(c.env, santriId)
+    }
+  } else {
+    await c.env.DB.prepare(
+      `UPDATE santri SET kelas_id = ?, version = version + 1, updated_at = datetime('now') WHERE id IN (${ph})`
+    ).bind(target_kelas_id, ...ids).run()
+  }
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
+     VALUES (?, ?, ?, 'kelas', ?, ?)`
+  ).bind(
+    crypto.randomUUID(),
+    user.sub,
+    lulus ? 'santri.lulus_bulk' : 'santri.naik_kelas_bulk',
+    sourceKelasId,
+    JSON.stringify({ target_kelas_id: lulus ? null : target_kelas_id, count: ids.length, santri_ids: ids })
+  ).run()
+
+  return c.json({
+    message: lulus
+      ? `${ids.length} santri berhasil diluluskan.`
+      : `${ids.length} santri berhasil dinaikkan ke kelas baru.`,
+    data: { count: ids.length, santri_ids: ids }
+  })
 })
 
 function requireAdmin(c: any, next: any) {
