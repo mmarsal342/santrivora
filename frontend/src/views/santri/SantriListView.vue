@@ -33,6 +33,7 @@ const search = ref('')
 const filterKamar = ref('')
 const filterKelamin = ref('')
 const filterStatus = ref('')
+const sortMode = ref<'nama' | 'kelas' | 'kamar'>('nama')
 
 const cursor = ref<string | undefined>(undefined)
 const hasMore = ref(false)
@@ -73,7 +74,7 @@ async function fetchList(append = false) {
   else loadingMore.value = true
   if (!append) error.value = ''
   try {
-    const params: Record<string, string | number | undefined> = { limit: 20 }
+    const params: Record<string, string | number | undefined> = { limit: 20, sort: sortMode.value }
     if (filterKamar.value) params.kamar_id = filterKamar.value
     if (filterKelamin.value) params.jenis_kelamin = filterKelamin.value
     if (filterStatus.value) params.status = filterStatus.value
@@ -104,9 +105,10 @@ function resetFilters() {
   filterKamar.value = ''
   filterKelamin.value = ''
   filterStatus.value = ''
+  sortMode.value = 'nama'
 }
 
-watch([filterKamar, filterKelamin, filterStatus], () => {
+watch([filterKamar, filterKelamin, filterStatus, sortMode], () => {
   cursor.value = undefined
   fetchList(false)
 })
@@ -179,7 +181,7 @@ onMounted(() => {
 
     <!-- Filter bar -->
     <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <div class="sm:col-span-2 lg:col-span-1">
           <label class="mb-1 block text-xs font-medium text-slate-600">Cari nama</label>
           <div class="relative">
@@ -225,6 +227,17 @@ onMounted(() => {
             <option value="aktif">Aktif</option>
             <option value="lulus">Lulus</option>
             <option value="keluar">Keluar</option>
+          </select>
+        </div>
+        <div>
+          <label class="mb-1 block text-xs font-medium text-slate-600">Urutkan</label>
+          <select
+            v-model="sortMode"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 bg-white"
+          >
+            <option value="nama">Nama (A-Z)</option>
+            <option value="kelas">Per Kelas</option>
+            <option value="kamar">Per Kamar</option>
           </select>
         </div>
       </div>
