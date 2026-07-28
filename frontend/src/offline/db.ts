@@ -8,15 +8,52 @@ export interface DraftRecord {
   updatedAt: string
 }
 
+export interface OutboxItem {
+  id?: number
+  entityType: string
+  localId: string
+  action: 'create' | 'update' | 'delete'
+  data: Record<string, unknown>
+  /** Version yang diketahui client SEBELUM mutasi ini (dipakai backend buat
+   * optimistic-concurrency check pas update/delete). Diabaikan backend saat create. */
+  version: number
+  status: 'pending' | 'error'
+  attempts: number
+  nextRetryAt: string | null
+  lastError?: string
+  createdAt: string
+}
+
+export interface ConflictRecord {
+  id?: number
+  entityType: string
+  localId: string
+  action: 'create' | 'update' | 'delete'
+  clientData: Record<string, unknown>
+  serverData: Record<string, unknown>
+  serverVersion: number
+  detectedAt: string
+}
+
+export interface SyncMetaRecord {
+  entityType: string
+  /** Cursor buat lanjutin HALAMAN pull yang lagi berjalan (di-reset null tiap
+   * kali satu window pull selesai — lihat sync/pull.ts). */
+  cursor: string | null
+}
+
 // Tabel data entity (kamar, santri, dst) diakses generik lewat
-// `db.table(entityType)` oleh composable (useEntityList/useEntityMutation di
-// fase POC) — SENGAJA tidak dideklarasikan sebagai properti bertipe di class
-// ini, biar nambah entity baru gak perlu nyentuh file ini sama sekali (schema
-// tabelnya sendiri sudah otomatis ke-generate dari registry di bawah).
-// `drafts` dideklarasikan eksplisit karena diakses langsung by name dari
-// useDraftPersistence, bukan lewat entityType dinamis.
+// `db.table(entityType)` oleh composable (useEntityList/useEntityMutation) —
+// SENGAJA tidak dideklarasikan sebagai properti bertipe di class ini, biar
+// nambah entity baru gak perlu nyentuh file ini sama sekali (schema tabelnya
+// sendiri sudah otomatis ke-generate dari registry di bawah). Tabel lain di
+// bawah dideklarasikan eksplisit karena diakses by name (bukan lewat
+// entityType dinamis) oleh sync engine/composable.
 class AppDatabase extends Dexie {
   drafts!: Table<DraftRecord, string>
+  outbox!: Table<OutboxItem, number>
+  conflicts!: Table<ConflictRecord, number>
+  syncMeta!: Table<SyncMetaRecord, string>
 
   constructor() {
     super('santrivora')
@@ -36,7 +73,10 @@ class AppDatabase extends Dexie {
     // membangun sistem migrasi versi sebelum benar-benar dibutuhkan.
     this.version(1).stores({
       ...entityStores,
-      drafts: '&draftKey, updatedAt'
+      drafts: '&draftKey, updatedAt',
+      outbox: '++id, [entityType+localId], status, nextRetryAt, createdAt',
+      conflicts: '++id, entityType, localId, detectedAt',
+      syncMeta: '&entityType'
     })
   }
 }

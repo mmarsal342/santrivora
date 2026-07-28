@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authService } from '@/services'
+import { pullAll, flushOutbox } from '@/offline/sync/engine'
 
 interface User {
   id: string
@@ -57,6 +58,11 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.setItem('access_token', data.access_token)
       localStorage.setItem('refresh_token', data.refresh_token)
       localStorage.setItem('cached_user', JSON.stringify(data.user))
+      // Pull sekali saat login (bukan cuma nunggu listener berkala di
+      // initSyncEngine, yang mungkin sudah lewat kick awalnya sebelum token
+      // ini ada) + flush jaga-jaga kalau ada outbox nyangkut dari sesi lain.
+      pullAll().catch(() => {})
+      flushOutbox().catch(() => {})
       return data
     } finally {
       loading.value = false
