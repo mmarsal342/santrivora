@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { perizinanService } from '@/services'
 import { useAuthStore } from '@/stores/auth'
 import { useEntityDetail } from '@/offline/composables/useEntityDetail'
 import { useEntityList } from '@/offline/composables/useEntityList'
@@ -366,39 +365,42 @@ async function removePerkembangan(catatanId: string) {
   }
 }
 
-// Izin pulang TETAP network langsung — belum masuk migrasi (gelombang 3,
-// termasuk transisi approve/tolak/kembali, sengaja ditunda ke akhir).
+// Izin pulang — push-eligible sejak gelombang 3 (mirror catatan_disiplin/
+// perkembangan). Banner "sedang izin pulang" sekarang dari cache, bukan
+// panggilan network terpisah lagi.
 interface Perizinan {
   id: string
+  santri_id: string
   tanggal_keluar: string
   perkiraan_kembali: string | null
   alasan: string
+  status: 'diajukan' | 'disetujui' | 'ditolak' | 'selesai'
+  is_deleted?: number
 }
-const izinAktif = ref<Perizinan | null>(null)
-const loadingIzin = ref(false)
+const perizinanMutation = useEntityMutation<Perizinan>('perizinan_pulang')
+const { allItems: perizinanAll } = useEntityList<Perizinan>('perizinan_pulang')
+const izinAktif = computed(() =>
+  perizinanAll.value.find((p) => p.santri_id === id && p.status === 'disetujui' && !p.is_deleted) ?? null
+)
 const izinError = ref('')
 const markingKembali = ref(false)
-
-async function loadIzinAktif() {
-  loadingIzin.value = true
-  izinError.value = ''
-  try {
-    const rows = (await perizinanService.list({ santri_id: id, status: 'disetujui' })) as Perizinan[]
-    izinAktif.value = rows[0] ?? null
-  } catch {
-    izinAktif.value = null
-  } finally {
-    loadingIzin.value = false
-  }
-}
 
 async function markKembali() {
   if (!izinAktif.value) return
   markingKembali.value = true
   izinError.value = ''
   try {
-    await perizinanService.kembali(izinAktif.value.id)
-    izinAktif.value = null
+    // Kirim tanggal hari ini eksplisit — lihat catatan yang sama di
+    // PerizinanListView.doKembali soal kenapa gak bisa diomit.
+    await perizinanMutation.update(izinAktif.value.id, { status: 'selesai', tanggal_kembali_aktual: new Date().toISOString().slice(0, 10) })
+    // Catatan: afterWrite backend (transisi 'selesai') otomatis nyatet entri
+    // baru ke catatan_perkembangan santri ini — tapi itu INSERT terpisah di
+    // server, gak ikut kebawa balik di response push. Entri itu baru
+    // kelihatan di tab Perkembangan setelah pull SELANJUTNYA (periodik/
+    // foreground/reload), bukan seketika di sini. Ini disengaja, bukan bug —
+    // sesuai sifat async push-lalu-pull, dan gak worth-nya ditambah pullAll()
+    // paksa di sini karena push sendiri masih debounced di background pada
+    // titik ini (belum pasti sudah nyampe server juga).
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     izinError.value = err?.response?.data?.message || 'Gagal menandai kembali.'
@@ -406,10 +408,6 @@ async function markKembali() {
     markingKembali.value = false
   }
 }
-
-onMounted(() => {
-  loadIzinAktif()
-})
 </script>
 
 <template>
