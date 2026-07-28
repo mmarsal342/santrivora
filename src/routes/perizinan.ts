@@ -13,6 +13,9 @@ const ajukanSchema = z.object({
   tanggal_keluar: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Format tanggal harus YYYY-MM-DD'),
   perkiraan_kembali: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   alasan: z.string().min(1, 'Alasan wajib diisi').max(500)
+}).refine((data) => !data.perkiraan_kembali || data.perkiraan_kembali >= data.tanggal_keluar, {
+  message: 'Perkiraan kembali tidak boleh sebelum tanggal keluar.',
+  path: ['perkiraan_kembali']
 })
 
 const updateSchema = z.object({
@@ -48,7 +51,7 @@ async function assertAccess(
 
   if (user.role === 'kepala_asrama') {
     if (santri.kamar_id && user.asrama_jenis) {
-      const k = await env.DB.prepare('SELECT jenis_kelamin FROM kamar WHERE id = ?').bind(santri.kamar_id).first<{ jenis_kelamin: string }>()
+      const k = await env.DB.prepare('SELECT jenis_kelamin FROM kamar WHERE id = ? AND is_active = 1').bind(santri.kamar_id).first<{ jenis_kelamin: string }>()
       if (k && k.jenis_kelamin === user.asrama_jenis) return { ok: true, kamarId: santri.kamar_id }
     }
     return { ok: false, reason: 'NOT_ASSIGNED', status: 403 }
@@ -69,7 +72,7 @@ async function assertApprovalAccess(
   if (user.role === 'admin') return true
   if (user.role === 'kepala_asrama') {
     if (!kamarId || !user.asrama_jenis) return false
-    const k = await env.DB.prepare('SELECT jenis_kelamin FROM kamar WHERE id = ?').bind(kamarId).first<{ jenis_kelamin: string }>()
+    const k = await env.DB.prepare('SELECT jenis_kelamin FROM kamar WHERE id = ? AND is_active = 1').bind(kamarId).first<{ jenis_kelamin: string }>()
     return !!k && k.jenis_kelamin === user.asrama_jenis
   }
   return false
@@ -82,10 +85,12 @@ function errorResponse(reason: string, status: number): Response {
     PERIZINAN_NOT_FOUND: 'Perizinan tidak ditemukan.',
     NOT_DIAJUKAN: 'Perizinan ini sudah diproses, tidak bisa diubah/dibatalkan lagi.',
     NOT_DISETUJUI: 'Perizinan ini belum disetujui, belum bisa ditandai kembali.',
-    APPROVAL_FORBIDDEN: 'Anda tidak berwenang menyetujui/menolak perizinan ini.'
+    APPROVAL_FORBIDDEN: 'Anda tidak berwenang menyetujui/menolak perizinan ini.',
+    ALREADY_PROCESSED: 'Perizinan ini sudah keburu diproses pihak lain. Muat ulang data terbaru.',
+    TANGGAL_KEMBALI_INVALID: 'Tanggal kembali tidak boleh sebelum tanggal keluar.'
   }
   return Response.json({
-    error: status === 404 ? 'Not Found' : 'Forbidden',
+    error: status === 404 ? 'Not Found' : status === 409 ? 'Conflict' : 'Forbidden',
     code: reason,
     message: messages[reason] || 'Akses ditolak.'
   } as ApiError, { status })
@@ -135,7 +140,7 @@ perizinan.get('/', async (c) => {
     }
     whereParts.push(`(${scopeParts.join(' OR ')})`)
   } else if (user.role === 'kepala_asrama') {
-    whereParts.push(`s.kamar_id IN (SELECT id FROM kamar WHERE jenis_kelamin = ?)`)
+    whereParts.push(`s.kamar_id IN (SELECT id FROM kamar WHERE jenis_kelamin = ? AND is_active = 1)`)
     params.push(user.asrama_jenis || '')
   }
 
@@ -183,7 +188,8 @@ perizinan.put('/:id', requireCanMutate(), zValidator('json', updateSchema), asyn
   const data = c.req.valid('json')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ?').bind(id).first<{ santri_id: string; status: string }>()
+  const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ?').bind(id)
+    .first<{ santri_id: string; status: string; tanggal_keluar: string; perkiraan_kembali: string | null }>()
   if (!existing) return errorResponse('PERIZINAN_NOT_FOUND', 404)
 
   const access = await assertAccess(c.env, user, existing.santri_id)
@@ -204,12 +210,22 @@ perizinan.put('/:id', requireCanMutate(), zValidator('json', updateSchema), asyn
     return c.json({ message: 'Tidak ada perubahan.', data: existing })
   }
 
+  const mergedTanggalKeluar = data.tanggal_keluar ?? existing.tanggal_keluar
+  const mergedPerkiraanKembali = data.perkiraan_kembali !== undefined ? data.perkiraan_kembali : existing.perkiraan_kembali
+  if (mergedPerkiraanKembali && mergedPerkiraanKembali < mergedTanggalKeluar) {
+    return errorResponse('TANGGAL_KEMBALI_INVALID', 400)
+  }
+
   updates.push("updated_at = datetime('now')")
   params.push(id)
 
-  await c.env.DB.prepare(
-    `UPDATE perizinan_pulang SET ${updates.join(', ')} WHERE id = ?`
+  // Guard WHERE status = 'diajukan' di UPDATE-nya sendiri (bukan cuma di cek di atas) —
+  // supaya dua request konkuren (mis. edit vs approve yang jalan nyaris bersamaan)
+  // tidak bisa dua-duanya lolos berdasarkan SELECT yang sama-sama masih baca status lama.
+  const stmt = await c.env.DB.prepare(
+    `UPDATE perizinan_pulang SET ${updates.join(', ')} WHERE id = ? AND status = 'diajukan'`
   ).bind(...params).run()
+  if (stmt.meta.changes === 0) return errorResponse('ALREADY_PROCESSED', 409)
 
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, old_value, new_value)
@@ -233,7 +249,8 @@ perizinan.delete('/:id', requireCanMutate(), async (c) => {
 
   if (existing.status !== 'diajukan') return errorResponse('NOT_DIAJUKAN', 400)
 
-  await c.env.DB.prepare('DELETE FROM perizinan_pulang WHERE id = ?').bind(id).run()
+  const stmt = await c.env.DB.prepare("DELETE FROM perizinan_pulang WHERE id = ? AND status = 'diajukan'").bind(id).run()
+  if (stmt.meta.changes === 0) return errorResponse('ALREADY_PROCESSED', 409)
 
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id)
@@ -257,9 +274,10 @@ perizinan.post('/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zValida
   if (!(await assertApprovalAccess(c.env, user, existing.kamar_id))) return errorResponse('APPROVAL_FORBIDDEN', 403)
   if (existing.status !== 'diajukan') return errorResponse('NOT_DIAJUKAN', 400)
 
-  await c.env.DB.prepare(
-    `UPDATE perizinan_pulang SET status = 'disetujui', disetujui_oleh = ?, catatan_keputusan = ?, updated_at = datetime('now') WHERE id = ?`
+  const stmt = await c.env.DB.prepare(
+    `UPDATE perizinan_pulang SET status = 'disetujui', disetujui_oleh = ?, catatan_keputusan = ?, updated_at = datetime('now') WHERE id = ? AND status = 'diajukan'`
   ).bind(user.sub, data.catatan_keputusan || null, id).run()
+  if (stmt.meta.changes === 0) return errorResponse('ALREADY_PROCESSED', 409)
 
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id)
@@ -284,9 +302,10 @@ perizinan.post('/:id/tolak', requireAnyRole('admin', 'kepala_asrama'), zValidato
   if (!(await assertApprovalAccess(c.env, user, existing.kamar_id))) return errorResponse('APPROVAL_FORBIDDEN', 403)
   if (existing.status !== 'diajukan') return errorResponse('NOT_DIAJUKAN', 400)
 
-  await c.env.DB.prepare(
-    `UPDATE perizinan_pulang SET status = 'ditolak', disetujui_oleh = ?, catatan_keputusan = ?, updated_at = datetime('now') WHERE id = ?`
+  const stmt = await c.env.DB.prepare(
+    `UPDATE perizinan_pulang SET status = 'ditolak', disetujui_oleh = ?, catatan_keputusan = ?, updated_at = datetime('now') WHERE id = ? AND status = 'diajukan'`
   ).bind(user.sub, data.catatan_keputusan, id).run()
+  if (stmt.meta.changes === 0) return errorResponse('ALREADY_PROCESSED', 409)
 
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id, new_value)
@@ -303,7 +322,8 @@ perizinan.post('/:id/kembali', requireCanMutate(), zValidator('json', kembaliSch
   const data = c.req.valid('json')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ?').bind(id).first<{ santri_id: string; status: string }>()
+  const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ?').bind(id)
+    .first<{ santri_id: string; status: string; tanggal_keluar: string }>()
   if (!existing) return errorResponse('PERIZINAN_NOT_FOUND', 404)
 
   const access = await assertAccess(c.env, user, existing.santri_id)
@@ -311,9 +331,13 @@ perizinan.post('/:id/kembali', requireCanMutate(), zValidator('json', kembaliSch
 
   if (existing.status !== 'disetujui') return errorResponse('NOT_DISETUJUI', 400)
 
-  await c.env.DB.prepare(
-    `UPDATE perizinan_pulang SET status = 'selesai', tanggal_kembali_aktual = ?, updated_at = datetime('now') WHERE id = ?`
-  ).bind(data.tanggal_kembali_aktual || new Date().toISOString().slice(0, 10), id).run()
+  const tanggalKembaliAktual = data.tanggal_kembali_aktual || new Date().toISOString().slice(0, 10)
+  if (tanggalKembaliAktual < existing.tanggal_keluar) return errorResponse('TANGGAL_KEMBALI_INVALID', 400)
+
+  const stmt = await c.env.DB.prepare(
+    `UPDATE perizinan_pulang SET status = 'selesai', tanggal_kembali_aktual = ?, updated_at = datetime('now') WHERE id = ? AND status = 'disetujui'`
+  ).bind(tanggalKembaliAktual, id).run()
+  if (stmt.meta.changes === 0) return errorResponse('ALREADY_PROCESSED', 409)
 
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id)

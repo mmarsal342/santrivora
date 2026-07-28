@@ -114,18 +114,28 @@ santri.get('/', async (c) => {
   // ada nama yang identik persis.
   if (cursor) {
     try {
-      const parsed = JSON.parse(cursor) as { g?: string; n: string; id: string }
-      if (groupExpr) {
-        conditions.push(
-          `(${groupExpr} COLLATE NOCASE > ? OR (${groupExpr} COLLATE NOCASE = ? AND (s.nama_lengkap COLLATE NOCASE > ? OR (s.nama_lengkap COLLATE NOCASE = ? AND s.id > ?))))`
-        )
-        params.push(parsed.g ?? '', parsed.g ?? '', parsed.n, parsed.n, parsed.id)
-      } else {
-        conditions.push('(s.nama_lengkap COLLATE NOCASE > ? OR (s.nama_lengkap COLLATE NOCASE = ? AND s.id > ?))')
-        params.push(parsed.n, parsed.n, parsed.id)
+      const parsed = JSON.parse(cursor) as { g?: unknown; n?: unknown; id?: unknown }
+      // Validasi shape secara eksplisit — JSON.parse bisa sukses untuk JSON yang
+      // valid tapi bentuknya salah (mis. "{}" atau field bertipe bukan string),
+      // yang kalau lolos ke .bind() sebagai undefined bakal dilempar D1 sebagai
+      // error (beda dari null yang diterima), bukan diabaikan dengan mulus
+      // seperti niatnya "cursor rusak -> mulai dari halaman pertama".
+      const gValid = groupExpr ? (parsed.g === undefined || typeof parsed.g === 'string') : true
+      if (typeof parsed.n === 'string' && typeof parsed.id === 'string' && gValid) {
+        if (groupExpr) {
+          const g = (parsed.g as string | undefined) ?? ''
+          conditions.push(
+            `(${groupExpr} COLLATE NOCASE > ? OR (${groupExpr} COLLATE NOCASE = ? AND (s.nama_lengkap COLLATE NOCASE > ? OR (s.nama_lengkap COLLATE NOCASE = ? AND s.id > ?))))`
+          )
+          params.push(g, g, parsed.n, parsed.n, parsed.id)
+        } else {
+          conditions.push('(s.nama_lengkap COLLATE NOCASE > ? OR (s.nama_lengkap COLLATE NOCASE = ? AND s.id > ?))')
+          params.push(parsed.n, parsed.n, parsed.id)
+        }
       }
+      // shape tidak valid — abaikan diam-diam, mulai dari halaman pertama
     } catch {
-      // cursor tidak valid/rusak — abaikan, mulai dari halaman pertama
+      // cursor bukan JSON valid sama sekali — abaikan, mulai dari halaman pertama
     }
   }
 
