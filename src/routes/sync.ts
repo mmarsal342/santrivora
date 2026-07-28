@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import { authMiddleware, requireCanMutate } from '../middleware/auth'
 import { resolveKamarScope, canAccessKamar } from '../lib/scope'
+import { recordSantriKamarChange, closeSantriKamarHistory } from '../lib/riwayatKamar'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const sync = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -431,6 +432,7 @@ sync.post('/conflicts/:id/resolve', requireCanMutate(), async (c) => {
             message: 'Data sudah berubah lagi sejak conflict ini tercatat. Silakan resolve ulang dengan data terbaru.'
           } as ApiError, 409)
         }
+        await recordSantriKamarChange(c.env, conflict.entity_id, current.kamar_id, effectiveKamarId)
       } else if (updateFields.length > 0 && conflict.entity_type === 'catatan_disiplin') {
         const current = await c.env.DB.prepare(
           'SELECT santri_id, tipe FROM catatan_disiplin WHERE id = ? AND is_deleted = 0'
@@ -541,6 +543,8 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
         item.data.love_language || null
       ).run()
 
+      await recordSantriKamarChange(env, newId, null, item.data.kamar_id || null)
+
       return { local_id: item.local_id, status: 'synced', server_id: newId, server_version: 1 }
     }
 
@@ -644,6 +648,8 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
             }
           }
         }
+
+        await recordSantriKamarChange(env, serverId, current.kamar_id, newKamarId)
       }
 
       return { local_id: item.local_id, status: 'synced', server_id: serverId, server_version: current.version + 1 }
@@ -670,6 +676,8 @@ async function processSantriSync(env: Env, item: any, user: UserPayload): Promis
       await env.DB.prepare(
         "UPDATE santri SET status = 'keluar', version = version + 1, updated_at = datetime('now') WHERE id = ?"
       ).bind(serverId).run()
+
+      await closeSantriKamarHistory(env, serverId)
 
       return { local_id: item.local_id, status: 'synced', server_id: serverId }
     }

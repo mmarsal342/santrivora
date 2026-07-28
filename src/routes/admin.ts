@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
 import { hashPassword } from '../services/auth'
 import { authMiddleware, requireRole, requireAnyRole, invalidateUserAccessTokens } from '../middleware/auth'
+import { recordPersonelKamarChange } from '../lib/riwayatKamar'
 import type { ApiError, Env, UserPayload } from '../types'
 
 const admin = new Hono<{ Bindings: Env; Variables: { user: UserPayload } }>()
@@ -264,6 +265,13 @@ admin.post('/users/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zVali
     `UPDATE users SET status = 'approved', failed_login_attempts = 0, updated_at = datetime('now') WHERE id = ?`
   ).bind(userId).run()
 
+  // Kamar lama, diambil SEBELUM dihapus — dipakai buat catat riwayat penugasan
+  // (lihat recordPersonelKamarChange di bawah), bukan buat logika approve itu sendiri.
+  const oldKamarRows = await c.env.DB.prepare(
+    'SELECT kamar_id FROM ustadz_kamar WHERE user_id = ?'
+  ).bind(userId).all<{ kamar_id: string }>()
+  const oldKamarIds = (oldKamarRows.results || []).map((r) => r.kamar_id)
+
   // Assign kamar (delete old + insert new)
   await c.env.DB.prepare('DELETE FROM ustadz_kamar WHERE user_id = ?').bind(userId).run()
 
@@ -274,6 +282,8 @@ admin.post('/users/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zVali
     const batch = kamar_ids.map((kamarId) => stmt.bind(userId, kamarId))
     await c.env.DB.batch(batch)
   }
+
+  await recordPersonelKamarChange(c.env, userId, oldKamarIds, kamar_ids)
 
   // Revoke sessions so stale kamar_ids in token can't be refreshed
   await c.env.DB.prepare('UPDATE sessions SET is_revoked = 1 WHERE user_id = ?').bind(userId).run()

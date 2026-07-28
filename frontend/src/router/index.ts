@@ -108,6 +108,18 @@ const router = createRouter({
           meta: { managerOnly: true }
         },
         {
+          path: 'personel',
+          name: 'personel',
+          component: () => import('@/views/personel/PersonelListView.vue'),
+          meta: { personelOnly: true }
+        },
+        {
+          path: 'personel/:id',
+          name: 'personel-detail',
+          component: () => import('@/views/personel/PersonelDetailView.vue'),
+          meta: { personelOnly: true }
+        },
+        {
           path: 'pesan',
           name: 'pesan',
           component: () => import('@/views/pesan/PesanView.vue')
@@ -172,6 +184,10 @@ router.beforeEach(async (to, _from, next) => {
   // pesan compose: kyai atau admin
   if (to.meta.kyaiOrAdmin && role !== 'kyai' && role !== 'admin') {
     return next({ name: 'pesan' })
+  }
+  // profil personel: kyai atau admin
+  if (to.meta.personelOnly && role !== 'kyai' && role !== 'admin') {
+    return next({ name: 'dashboard' })
   }
 
   next()

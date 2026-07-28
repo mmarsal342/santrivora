@@ -15,6 +15,7 @@ import { catatanHaidRoutes } from './routes/catatanHaid'
 import { catatanPerkembanganRoutes } from './routes/catatanPerkembangan'
 import { dashboardRoutes } from './routes/dashboard'
 import { pesanRoutes } from './routes/pesan'
+import { personelRoutes } from './routes/personel'
 import { syncRoutes } from './routes/sync'
 import type { Env } from './types'
 
@@ -47,6 +48,7 @@ app.route('/api/catatan-haid', catatanHaidRoutes)
 app.route('/api/catatan-perkembangan', catatanPerkembanganRoutes)
 app.route('/api/dashboard', dashboardRoutes)
 app.route('/api/pesan', pesanRoutes)
+app.route('/api/personel', personelRoutes)
 app.route('/api/sync', syncRoutes)
 
 // Health check
