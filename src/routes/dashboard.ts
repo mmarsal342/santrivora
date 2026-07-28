@@ -268,11 +268,12 @@ dashboard.get('/per-wali-kamar', dashboardRead, async (c) => {
     const kamarRows = kamarAssignments.results || []
     const kamarIds = kamarRows.map((k) => k.id)
 
-    // catatanHaid.ts (assertHaidAccess) eksplisit blokir kyai dari data haid
-    // (data sensitif) walau kyai global-read di tempat lain — dashboard ini
-    // sebelumnya gak ikut aturan itu. Skip query-nya sama sekali buat kyai,
-    // bukan cuma sembunyikan hasilnya.
-    const kamarPutriIds = user.role === 'kyai' ? [] : kamarRows.filter((k) => k.jenis_kelamin === 'P').map((k) => k.id)
+    // catatanHaid.ts (assertHaidAccess) tetap blokir kyai dari DETAIL per-santri
+    // (data sensitif, siapa saja yang haid) — tapi kyai & admin boleh lihat
+    // JUMLAH/agregat (keputusan produk eksplisit, beda dari akses baris
+    // individual yang tidak berubah). Query ini murni COUNT(*), tidak pernah
+    // mengembalikan nama/identitas santri, jadi aman dibuka untuk kyai juga.
+    const kamarPutriIds = kamarRows.filter((k) => k.jenis_kelamin === 'P').map((k) => k.id)
 
     const [stats, catatanHaidTercatat] = await Promise.all([
       computeKamarStats(c.env, kamarIds, dari, sampai),
