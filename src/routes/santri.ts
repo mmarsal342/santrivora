@@ -36,10 +36,18 @@ const updateSchema = z.object({
   love_language: z.string().max(200).nullable().optional()
 })
 
+type SantriSortMode = 'nama' | 'kelas' | 'kamar'
+const SANTRI_SORT_MODES: SantriSortMode[] = ['nama', 'kelas', 'kamar']
+
 // GET /api/santri — scoped by role (wali kelas via kelas_ids, wali kamar via kamar_ids)
+// sort: 'nama' (default) | 'kelas' | 'kamar' — dua terakhir mengelompokkan per
+// kelas/kamar, lalu tetap abjad nama di dalam tiap grup (bukan cuma abjad global).
 santri.get('/', async (c) => {
   const user = c.get('user')
-  const { kelas_id, kamar_id, jenis_kelamin, angkatan, status, q, cursor, limit } = c.req.query()
+  const { kelas_id, kamar_id, jenis_kelamin, angkatan, status, q, cursor, limit, sort } = c.req.query()
+
+  const sortMode: SantriSortMode = SANTRI_SORT_MODES.includes(sort as SantriSortMode) ? (sort as SantriSortMode) : 'nama'
+  const groupExpr = sortMode === 'kelas' ? "COALESCE(k.nama, '')" : sortMode === 'kamar' ? "COALESCE(km.nama, '')" : null
 
   const params: unknown[] = []
   const conditions: string[] = []
@@ -100,30 +108,54 @@ santri.get('/', async (c) => {
     conditions.push('s.nama_lengkap LIKE ?')
     params.push(`%${q}%`)
   }
+  // Keyset pagination mengikuti urutan sort yang aktif — bukan lagi s.id ASC
+  // tetap. nama_lengkap (dan group kelas/kamar) selalu jadi bagian dari kunci
+  // seek, dengan s.id sebagai tie-breaker terakhir supaya tetap stabil kalau
+  // ada nama yang identik persis.
   if (cursor) {
-    conditions.push('s.id > ?')
-    params.push(cursor)
+    try {
+      const parsed = JSON.parse(cursor) as { g?: string; n: string; id: string }
+      if (groupExpr) {
+        conditions.push(
+          `(${groupExpr} COLLATE NOCASE > ? OR (${groupExpr} COLLATE NOCASE = ? AND (s.nama_lengkap COLLATE NOCASE > ? OR (s.nama_lengkap COLLATE NOCASE = ? AND s.id > ?))))`
+        )
+        params.push(parsed.g ?? '', parsed.g ?? '', parsed.n, parsed.n, parsed.id)
+      } else {
+        conditions.push('(s.nama_lengkap COLLATE NOCASE > ? OR (s.nama_lengkap COLLATE NOCASE = ? AND s.id > ?))')
+        params.push(parsed.n, parsed.n, parsed.id)
+      }
+    } catch {
+      // cursor tidak valid/rusak — abaikan, mulai dari halaman pertama
+    }
   }
 
   const pageLimit = Math.min(Math.max(parseInt(limit || '20') || 20, 1), 100)
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+  const orderBy = groupExpr
+    ? `${groupExpr} COLLATE NOCASE ASC, s.nama_lengkap COLLATE NOCASE ASC, s.id ASC`
+    : 's.nama_lengkap COLLATE NOCASE ASC, s.id ASC'
   const query = `
     SELECT s.*, k.nama as kelas_nama, k.tingkatan, km.nama as kamar_nama, km.jenis_kelamin as kamar_jenis_kelamin
     FROM santri s
     LEFT JOIN kelas k ON s.kelas_id = k.id
     LEFT JOIN kamar km ON s.kamar_id = km.id
     ${where}
-    ORDER BY s.id ASC
+    ORDER BY ${orderBy}
     LIMIT ?
   `
   params.push(pageLimit + 1)
 
-  const dbResult = await c.env.DB.prepare(query).bind(...params).all<{ id: string }>()
+  const dbResult = await c.env.DB.prepare(query).bind(...params).all<{ id: string; nama_lengkap: string; kelas_nama: string | null; kamar_nama: string | null }>()
   const results = dbResult.results || []
   const hasMore = results.length > pageLimit
   const data = hasMore ? results.slice(0, pageLimit) : results
-  const nextCursor = hasMore ? data[data.length - 1]?.id : null
+  let nextCursor: string | null = null
+  if (hasMore) {
+    const last = data[data.length - 1]
+    const g = sortMode === 'kelas' ? (last.kelas_nama ?? '') : sortMode === 'kamar' ? (last.kamar_nama ?? '') : undefined
+    nextCursor = JSON.stringify({ g, n: last.nama_lengkap, id: last.id })
+  }
 
   return c.json({
     data,
