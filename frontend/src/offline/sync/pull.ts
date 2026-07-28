@@ -1,3 +1,4 @@
+import { ref } from 'vue'
 import api from '@/services/api'
 import { db } from '../db'
 import { pullableEntities } from '../registry'
@@ -10,8 +11,14 @@ function getSince(): string {
   return localStorage.getItem(SINCE_KEY) ?? EPOCH
 }
 
+/** Reaktif — dipakai SyncStatusIndicator buat nampilin "terakhir sync
+ * <waktu>". Diseed dari localStorage biar tetap kelihatan benar setelah
+ * reload (bukan balik ke null). */
+export const lastSyncAt = ref<string | null>(localStorage.getItem(SINCE_KEY))
+
 function setSince(value: string): void {
   localStorage.setItem(SINCE_KEY, value)
+  lastSyncAt.value = value
 }
 
 interface PullResponse {
