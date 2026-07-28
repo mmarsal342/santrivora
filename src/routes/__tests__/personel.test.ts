@@ -52,8 +52,16 @@ describe('personel.ts — GET /:id profil + ringkasan aktivitas', () => {
     }, testEnv())
 
     expect(res.status).toBe(200)
-    const body = await res.json() as { data: { id: string; assigned_kamar: unknown[]; aktivitas: Record<string, number> } }
+    const body = await res.json() as {
+      data: { id: string; nama_lengkap: string; email: string; role: string; assigned_kamar: unknown[]; aktivitas: Record<string, number> }
+    }
     expect(body.data.id).toBe(ustadz.id)
+    // Regresi: attachAssignments sempat dipanggil dengan `{ id }` doang (bukan
+    // objek user lengkap), jadi field-field ini hilang total dari respons dan
+    // bikin frontend crash (profil.nama_lengkap.charAt(0) di halaman blank putih).
+    expect(body.data.nama_lengkap).toBeTruthy()
+    expect(body.data.email).toBe(ustadz.email)
+    expect(body.data.role).toBe('ustadz')
     expect(body.data.assigned_kamar.length).toBe(1)
     expect(body.data.aktivitas.catatan_disiplin_dicatat).toBe(0)
   })

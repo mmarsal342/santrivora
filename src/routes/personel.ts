@@ -105,14 +105,24 @@ personel.get('/:id', async (c) => {
 
   const user = await c.env.DB.prepare(
     'SELECT id, email, nama_lengkap, role, asrama_jenis, status, last_login, created_at, updated_at FROM users WHERE id = ?'
-  ).bind(id).first()
+  ).bind(id).first<{
+    id: string
+    email: string
+    nama_lengkap: string
+    role: string
+    asrama_jenis: string | null
+    status: string
+    last_login: string | null
+    created_at: string
+    updated_at: string
+  }>()
 
   if (!user) {
     return c.json({ error: 'Not Found', code: 'PERSONEL_NOT_FOUND', message: 'Personel tidak ditemukan.' } as ApiError, 404)
   }
 
   const [assigned, aktivitas] = await Promise.all([
-    attachAssignments(c.env, [{ id }]),
+    attachAssignments(c.env, [user]),
     Promise.all([
       c.env.DB.prepare('SELECT COUNT(*) as c FROM catatan_disiplin WHERE dicatat_oleh = ? AND is_deleted = 0').bind(id).first<{ c: number }>(),
       c.env.DB.prepare('SELECT COUNT(*) as c FROM catatan_perkembangan WHERE dicatat_oleh = ? AND is_deleted = 0').bind(id).first<{ c: number }>(),

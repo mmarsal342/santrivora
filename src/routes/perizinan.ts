@@ -323,7 +323,7 @@ perizinan.post('/:id/kembali', requireCanMutate(), zValidator('json', kembaliSch
   const user = c.get('user')
 
   const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ?').bind(id)
-    .first<{ santri_id: string; status: string; tanggal_keluar: string }>()
+    .first<{ santri_id: string; status: string; tanggal_keluar: string; alasan: string }>()
   if (!existing) return errorResponse('PERIZINAN_NOT_FOUND', 404)
 
   const access = await assertAccess(c.env, user, existing.santri_id)
@@ -343,6 +343,20 @@ perizinan.post('/:id/kembali', requireCanMutate(), zValidator('json', kembaliSch
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id)
      VALUES (?, ?, 'perizinan.kembali', 'perizinan_pulang', ?)`
   ).bind(crypto.randomUUID(), user.sub, id).run()
+
+  // Catatkan juga ke catatan_perkembangan santri, supaya izin pulang yang sudah
+  // selesai (pergi -> kembali) ikut muncul di timeline perkembangan santri —
+  // bukan cuma tersimpan di halaman Perizinan Pulang yang terpisah.
+  await c.env.DB.prepare(
+    `INSERT INTO catatan_perkembangan (id, santri_id, tanggal, kategori, judul, catatan, dicatat_oleh)
+     VALUES (?, ?, ?, 'Keluarga', 'Izin Pulang', ?, ?)`
+  ).bind(
+    crypto.randomUUID(),
+    existing.santri_id,
+    existing.tanggal_keluar,
+    `${existing.alasan} (keluar ${existing.tanggal_keluar}, kembali ${tanggalKembaliAktual})`,
+    user.sub
+  ).run()
 
   const result = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ?').bind(id).first()
   return c.json({ message: 'Santri sudah ditandai kembali.', data: result })
