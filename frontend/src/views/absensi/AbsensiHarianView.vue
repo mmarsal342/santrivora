@@ -2,19 +2,36 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { kamarService, kegiatanService, santriService, absensiService } from '@/services'
+import { kegiatanService, absensiService } from '@/services'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { pullAll } from '@/offline/sync/engine'
 
 interface Kamar {
   id: string
   nama: string
   jenis_kelamin: 'L' | 'P'
-  jumlah_santri?: number
+  is_active?: number
 }
 
 interface Kegiatan {
   id: string
   nama: string
   jenis?: string
+}
+
+interface SantriCache {
+  id: string
+  nama_lengkap: string
+  kamar_id: string | null
+  status: string
+}
+
+interface AbsensiCache {
+  santri_id: string
+  tanggal: string
+  kegiatan_id: string | null
+  status: 'hadir' | 'sakit' | 'izin' | 'alpa'
+  keterangan?: string | null
 }
 
 interface SantriRow {
@@ -38,7 +55,19 @@ const statusOptions: Array<{ value: AbsensiStatus; label: string; short: string;
 const auth = useAuthStore()
 const route = useRoute()
 
-const kamarList = ref<Kamar[]>([])
+// kamar & santri sudah ke-cache (pull-only/push-eligible) — dropdown kamar
+// dan roster santri baca dari sana, instan & jalan offline. absensi yang
+// SUDAH tercatat juga dari cache (pull-only di gelombang ini, lihat
+// offline/entities/absensi.config.ts). kegiatanList TETAP network langsung
+// (kegiatanService.list({tanggal})) — itu yang men-trigger materialize
+// instance kegiatan dari jadwal_kegiatan di server (side-effect nyata, cuma
+// terjadi lewat REST GET ini, BUKAN lewat /api/sync/pull) — kalau offline,
+// try/catch di bawah sudah gracefully fallback ke [] seperti sebelumnya.
+const { allItems: kamarOptions, loading: loadingKamar } = useEntityList<Kamar>('kamar')
+const { allItems: allSantri } = useEntityList<SantriCache>('santri')
+const { allItems: allAbsensi } = useEntityList<AbsensiCache>('absensi')
+
+const kamarList = computed(() => kamarOptions.value.filter((k) => k.is_active !== 0))
 const kegiatanList = ref<Kegiatan[]>([])
 const selectedKamar = ref('')
 const selectedKegiatan = ref('') // '' = absensi harian umum
@@ -46,28 +75,22 @@ const tanggal = ref(new Date().toISOString().slice(0, 10))
 
 const santriRows = ref<SantriRow[]>([])
 
-const loadingKamar = ref(true)
-const loadingRoster = ref(false)
 const submitting = ref(false)
 const error = ref('')
 const successMessage = ref('')
 
 const showKamarPicker = computed(() => kamarList.value.length > 1 || auth.isAdmin)
 
-async function loadKamar() {
-  loadingKamar.value = true
-  try {
-    kamarList.value = await kamarService.list()
-    if (kamarList.value.length === 1) {
-      selectedKamar.value = kamarList.value[0].id
-    }
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal memuat daftar kamar.'
-  } finally {
-    loadingKamar.value = false
+// Auto-pilih kamar kalau cuma ada satu — sekali aja pas cache pertama kali
+// kebaca (mirror pola auto-pilih di SantriFormView).
+let autoKamarPicked = false
+watch(kamarList, (opts) => {
+  if (autoKamarPicked || selectedKamar.value) return
+  if (opts.length === 1) {
+    autoKamarPicked = true
+    selectedKamar.value = opts[0].id
   }
-}
+}, { immediate: true })
 
 async function loadKegiatan() {
   if (!selectedKamar.value) {
@@ -85,33 +108,29 @@ async function loadKegiatan() {
   }
 }
 
-let rosterGen = 0
-
-async function loadRoster() {
+// Roster (baca) sekarang SEPENUHNYA dari cache Dexie, sinkron (bukan async
+// fetch) — rosterGen (workaround race pemanggilan network bertumpuk) gak
+// diperlukan lagi sama sekali, tinggal re-seed langsung tiap seleksi
+// kamar/tanggal/kegiatan berubah. SENGAJA cuma re-seed di titik itu (bukan
+// terus-menerus reaktif ke perubahan cache lain) — biar background pull gak
+// diam-diam nimpa status/keterangan yang lagi diedit user buat kamar/tanggal
+// yang SAMA.
+function loadRoster() {
+  error.value = ''
+  successMessage.value = ''
   if (!selectedKamar.value) {
     santriRows.value = []
     return
   }
-  const myGen = ++rosterGen
-  loadingRoster.value = true
-  error.value = ''
-  successMessage.value = ''
-  try {
-    const [res, existingRes] = await Promise.all([
-      santriService.list({ kamar_id: selectedKamar.value, status: 'aktif', limit: 200 }),
-      absensiService.list({
-        kamar_id: selectedKamar.value,
-        tanggal: tanggal.value,
-        kegiatan_id: selectedKegiatan.value || undefined,
-        limit: 200
-      })
-    ])
-    if (myGen !== rosterGen) return // stale response, ignore
-    const santriData = (res.data ?? []) as Array<{ id: string; nama_lengkap: string }>
-    const existingList = (existingRes.data ?? []) as Array<{ santri_id: string; status: AbsensiStatus; keterangan?: string }>
-    const existingMap = new Map(existingList.map((a) => [a.santri_id, a]))
-
-    santriRows.value = santriData.map((s) => {
+  const kegiatanId = selectedKegiatan.value || null
+  const existingMap = new Map(
+    allAbsensi.value
+      .filter((a) => a.tanggal === tanggal.value && (a.kegiatan_id ?? null) === kegiatanId)
+      .map((a) => [a.santri_id, a])
+  )
+  santriRows.value = allSantri.value
+    .filter((s) => s.kamar_id === selectedKamar.value && s.status === 'aktif')
+    .map((s) => {
       const existing = existingMap.get(s.id)
       return {
         id: s.id,
@@ -120,14 +139,6 @@ async function loadRoster() {
         keterangan: existing?.keterangan ?? ''
       }
     })
-  } catch (e: unknown) {
-    if (myGen !== rosterGen) return
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal memuat daftar santri.'
-    santriRows.value = []
-  } finally {
-    if (myGen === rosterGen) loadingRoster.value = false
-  }
 }
 
 function setAllHadir() {
@@ -157,6 +168,10 @@ async function submit() {
     }
     const result = await absensiService.bulkMark(payload)
     successMessage.value = `${result.success}/${result.total} absensi berhasil disimpan.`
+    // bulkMark tetap network langsung (aksi batch sadar sekali-klik, bukan
+    // aliran mutasi independen) — refresh cache absensi lokal sesudahnya
+    // biar liveQuery lain (kalau ada) ikut lihat data terbaru.
+    pullAll().catch(() => {})
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal menyimpan absensi.'
@@ -179,7 +194,12 @@ watch(selectedKegiatan, () => {
   loadRoster()
 })
 
-onMounted(loadKamar)
+onMounted(() => {
+  if (selectedKamar.value) {
+    loadKegiatan()
+    loadRoster()
+  }
+})
 </script>
 
 <template>
@@ -257,13 +277,8 @@ onMounted(loadKamar)
         >Set semua Hadir</button>
       </div>
 
-      <!-- Loading roster -->
-      <div v-if="loadingRoster" class="space-y-2">
-        <div v-for="i in 5" :key="i" class="h-16 animate-pulse rounded-xl bg-slate-100"></div>
-      </div>
-
-      <!-- Roster -->
-      <div v-else-if="santriRows.length" class="space-y-2">
+      <!-- Roster (baca dari cache, instan — gak ada loading state async lagi) -->
+      <div v-if="santriRows.length" class="space-y-2">
         <div
           v-for="s in santriRows"
           :key="s.id"
