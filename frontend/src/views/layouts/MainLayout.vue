@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import SyncStatusIndicator from '@/components/SyncStatusIndicator.vue'
 
 interface NavItem {
   name: string
@@ -293,6 +294,8 @@ async function handleLogout(): Promise<void> {
         </div>
 
         <div class="ml-auto flex items-center gap-3">
+          <SyncStatusIndicator />
+
           <!-- User info -->
           <div v-if="auth.user" class="hidden items-center gap-2.5 sm:flex">
             <div class="text-right leading-tight">

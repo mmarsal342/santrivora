@@ -146,6 +146,11 @@ const router = createRouter({
           name: 'audit-log',
           component: () => import('@/views/admin/AuditLogView.vue'),
           meta: { adminOnly: true }
+        },
+        {
+          path: 'sync/conflicts',
+          name: 'sync-conflicts',
+          component: () => import('@/views/sync/SyncConflictsView.vue')
         }
       ]
     }

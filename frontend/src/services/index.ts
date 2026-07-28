@@ -381,3 +381,24 @@ export const pesanService = {
     return response.data.data
   }
 }
+
+export const syncService = {
+  async listConflicts() {
+    const response = await api.get('/sync/conflicts')
+    return response.data.data as Array<{
+      id: string
+      entity_type: string
+      entity_id: string
+      client_version: number
+      server_version: number
+      client_data: string
+      server_data: string
+      conflict_type: string
+      created_at: string
+    }>
+  },
+  async resolveConflict(id: string, body: { resolution: 'use_server' | 'use_client' | 'manual_merge'; merged_data?: Record<string, unknown> }) {
+    const response = await api.post(`/sync/conflicts/${id}/resolve`, body)
+    return response.data
+  }
+}

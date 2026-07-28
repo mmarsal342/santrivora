@@ -1,5 +1,5 @@
 import { flushOutbox } from './push'
-import { pullAll } from './pull'
+import { pullAll, lastSyncAt } from './pull'
 
 const PUSH_DEBOUNCE_MS = 1200
 const PULL_INTERVAL_MS = 5 * 60 * 1000
@@ -64,4 +64,4 @@ export function initSyncEngine(): void {
   }, PULL_INTERVAL_MS)
 }
 
-export { flushOutbox, pullAll }
+export { flushOutbox, pullAll, lastSyncAt }
