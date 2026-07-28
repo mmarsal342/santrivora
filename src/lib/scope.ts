@@ -43,6 +43,23 @@ export async function resolveKamarScope(env: Env, user: UserPayload): Promise<st
   return user.kamar_ids
 }
 
+/**
+ * Kelas-equivalent dari resolveKamarScope. Kepala asrama tidak punya dimensi
+ * kelas sama sekali (asramanya dibatasi per-kamar, bukan per-kelas) → [].
+ */
+export async function resolveKelasScope(env: Env, user: UserPayload): Promise<string[] | null> {
+  if (user.role === 'admin' || user.role === 'kyai') return null
+  if (user.role === 'kepala_asrama') return []
+  return user.kelas_ids
+}
+
+/** Kelas-equivalent dari canAccessKamar. */
+export function canAccessKelas(user: UserPayload, kelasId: string | null | undefined): boolean {
+  if (user.role === 'admin' || user.role === 'kyai') return true
+  if (user.role === 'kepala_asrama') return false
+  return !!kelasId && user.kelas_ids.includes(kelasId)
+}
+
 /** Cek apakah sebuah kamar berada dalam lingkup asrama user (untuk kepala_asrama). */
 export function asramaMatches(user: UserPayload, kamarJenisKelamin: 'L' | 'P'): boolean {
   if (user.role !== 'kepala_asrama') return true
