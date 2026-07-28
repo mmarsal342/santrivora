@@ -130,7 +130,7 @@ async function processCreate(env: Env, config: EntitySyncConfig, item: PushItem,
     const santri = await env.DB.prepare('SELECT kelas_id, kamar_id, status FROM santri WHERE id = ?').bind(santriId).first<{ kelas_id: string | null; kamar_id: string | null; status: string }>()
     if (!santri) return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_FOUND' }
     if (!(await checkScopeRule(env, user, { kind: 'direct-kamar-kelas' } as ScopeRule, santri))) {
-      return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_ACCESSIBLE' }
+      return { local_id: item.local_id, status: 'error', error: config.scopeDeniedCode }
     }
     if (config.requireActiveParent && santri.status !== 'aktif') {
       return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_ACTIVE' }
@@ -341,6 +341,13 @@ export async function processPushItem(env: Env, item: PushItem, user: UserPayloa
   if (!config || config.capability !== 'full') {
     return { local_id: item.local_id, status: 'error', error: 'Unknown entity type' }
   }
+  // Mirror requireCanMutate() yang dulu dipasang blanket di level route
+  // /api/sync — sekarang per-entity, karena beberapa entity (catatan_personel)
+  // SENGAJA mengizinkan kyai menulis, beda dari mayoritas entity lain.
+  const blockedRoles = config.readOnlyRoles ?? ['kyai']
+  if (blockedRoles.includes(user.role)) {
+    return { local_id: item.local_id, status: 'error', error: 'READ_ONLY_ROLE' }
+  }
   if (config.disabledActions?.includes(item.action)) {
     return { local_id: item.local_id, status: 'error', error: 'ACTION_NOT_SUPPORTED' }
   }
@@ -543,6 +550,13 @@ export async function processResolve(env: Env, user: UserPayload, conflictId: st
   }
 
   const config = getEntityConfig(conflict.entity_type)
+
+  if (config) {
+    const blockedRoles = config.readOnlyRoles ?? ['kyai']
+    if (blockedRoles.includes(user.role)) {
+      return { status: 403, body: { error: 'Forbidden', code: 'READ_ONLY_ROLE', message: 'Peran Anda bersifat read-only.' } }
+    }
+  }
 
   if (resolvedData && config) {
     const updateFields = Object.entries(resolvedData).filter(([k, v]) => config.writableColumns.includes(k) && v !== undefined)

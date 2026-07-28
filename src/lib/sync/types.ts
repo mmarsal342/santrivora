@@ -74,6 +74,15 @@ export interface EntitySyncConfig {
   naturalKeyNullable?: string[]
   /** action push yang sengaja belum didukung entity ini (mis. absensi belum ada endpoint delete). */
   disabledActions?: Array<'create' | 'update' | 'delete'>
+  /**
+   * Role yang diblokir MUTLAK dari create/update/delete/resolve entity ini,
+   * TERLEPAS dari hasil scope check (mirror requireCanMutate() yang dulu
+   * dipasang di level route /api/sync). Default ['kyai'] kalau tidak diisi —
+   * kyai read-only di hampir semua entity. Entity yang SENGAJA mengizinkan
+   * kyai menulis (mis. catatan_personel — kyai salah satu penulis utama)
+   * override jadi [] di config-nya sendiri.
+   */
+  readOnlyRoles?: Role[]
   createSchema: z.ZodType<any>
   updateSchema: z.ZodType<any>
   /** SATU whitelist, dipakai push-update DAN conflict-resolve merged_data */

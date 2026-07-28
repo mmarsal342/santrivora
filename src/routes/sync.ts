@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { zValidator } from '@hono/zod-validator'
-import { authMiddleware, requireCanMutate } from '../middleware/auth'
+import { authMiddleware } from '../middleware/auth'
 import '../lib/sync/entities'
 import { pullableEntityTypes, pushEligibleEntityTypes } from '../lib/sync/registry'
 import { processPull, processPushItem, processResolve } from '../lib/sync/engine'
@@ -24,7 +24,11 @@ const pushSchema = z.object({
 })
 
 // POST /api/sync — push batch changes from client
-sync.post('/', requireCanMutate(), zValidator('json', pushSchema), async (c) => {
+// Otorisasi "boleh menulis atau tidak" sekarang per-entity (lihat
+// config.readOnlyRoles di engine.ts) — bukan lagi blanket requireCanMutate()
+// di sini, karena beberapa entity (catatan_personel) sengaja mengizinkan kyai
+// menulis. Batch bisa berisi campuran entity dengan aturan berbeda-beda.
+sync.post('/', zValidator('json', pushSchema), async (c) => {
   const { items } = c.req.valid('json')
   const user = c.get('user')
   const results: Array<{
@@ -124,7 +128,7 @@ sync.get('/conflicts', async (c) => {
 })
 
 // POST /api/sync/conflicts/:id/resolve
-sync.post('/conflicts/:id/resolve', requireCanMutate(), async (c) => {
+sync.post('/conflicts/:id/resolve', async (c) => {
   const conflictId = c.req.param('id') ?? ''
   const user = c.get('user')
   type ResolveBody = { resolution: 'use_server' | 'use_client' | 'manual_merge'; merged_data?: Record<string, unknown> }
