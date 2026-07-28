@@ -132,10 +132,21 @@ async function processCreate(env: Env, config: EntitySyncConfig, item: PushItem,
     if (config.requireActiveParent && santri.status !== 'aktif') {
       return { local_id: item.local_id, status: 'error', error: 'SANTRI_NOT_ACTIVE' }
     }
+  } else {
+    // 'custom' / 'role-only' / 'global' — entity tanpa kelas_id/kamar_id sendiri
+    // dan tanpa konsep "target" (mis. absensi: akses ditentukan lewat santri_id
+    // yang dituju, bukan lewat sesuatu yang sedang "dipindah").
+    if (!(await checkScopeRule(env, user, config.scope, data))) {
+      return { local_id: item.local_id, status: 'error', error: config.scopeDeniedCode }
+    }
   }
 
   const refErr = await validateRefsForCreate(env, config.refValidations, data)
   if (refErr) return { local_id: item.local_id, status: 'error', error: refErr }
+
+  if (config.naturalKey) {
+    return processNaturalKeyUpsert(env, config, item, data, user)
+  }
 
   const newId = serverId || crypto.randomUUID()
   const createCols = config.createColumns ?? config.writableColumns
@@ -149,6 +160,49 @@ async function processCreate(env: Env, config: EntitySyncConfig, item: PushItem,
     await config.afterWrite(env, 'create', newId, null, { ...data, ...extra, id: newId })
   }
 
+  return { local_id: item.local_id, status: 'synced', server_id: newId, server_version: 1 }
+}
+
+/**
+ * Upsert berbasis kombinasi kolom unik (bukan id) — dipakai absensi, mirror
+ * semantik ON CONFLICT(...) DO UPDATE yang sudah ada di absensi.ts /bulk:
+ * kalau baris dengan kombinasi naturalKey ini sudah ada, TIMPA (last-write-wins,
+ * TANPA optimistic-concurrency check di jalur create — sengaja, demi paritas
+ * dengan endpoint /bulk yang sudah ada), bukan bikin baris baru/duplikat.
+ */
+async function processNaturalKeyUpsert(
+  env: Env, config: EntitySyncConfig, item: PushItem, data: Record<string, unknown>, user: UserPayload
+): Promise<PushResult> {
+  const idCol = config.idColumn ?? 'id'
+  const keyCols = config.naturalKey!
+  const conds = keyCols
+    .map((k) => (config.naturalKeyNullable?.includes(k) ? `COALESCE(${k}, '') = COALESCE(?, '')` : `${k} = ?`))
+    .join(' AND ')
+  const keyValues = keyCols.map((k) => (data[k] !== undefined ? data[k] : null))
+
+  const existing = await env.DB.prepare(`SELECT ${idCol} FROM ${config.table} WHERE ${conds}`).bind(...keyValues).first<Record<string, unknown>>()
+
+  const createCols = config.createColumns ?? config.writableColumns
+  const extra = config.createExtra ? config.createExtra(data, user) : {}
+  const setCols = [...createCols, ...Object.keys(extra)]
+  const setValues = [...createCols.map((c) => (data[c] !== undefined ? data[c] : null)), ...Object.values(extra)]
+
+  if (existing) {
+    const targetId = existing[idCol] as string
+    const sets = setCols.map((c) => `${c} = ?`).join(', ')
+    await env.DB.prepare(
+      `UPDATE ${config.table} SET ${sets}, version = version + 1, updated_at = datetime('now') WHERE ${idCol} = ?`
+    ).bind(...setValues, targetId).run()
+    const updated = await env.DB.prepare(`SELECT version FROM ${config.table} WHERE ${idCol} = ?`).bind(targetId).first<{ version: number }>()
+    if (config.afterWrite) await config.afterWrite(env, 'update', targetId, null, { ...data, ...extra, id: targetId })
+    return { local_id: item.local_id, status: 'synced', server_id: targetId, server_version: updated?.version ?? 1 }
+  }
+
+  const newId = (data.id as string | undefined) || crypto.randomUUID()
+  const colNames = [idCol, ...setCols, 'version']
+  const placeholders = colNames.map(() => '?').join(', ')
+  await env.DB.prepare(`INSERT INTO ${config.table} (${colNames.join(', ')}) VALUES (${placeholders})`).bind(newId, ...setValues, 1).run()
+  if (config.afterWrite) await config.afterWrite(env, 'create', newId, null, { ...data, ...extra, id: newId })
   return { local_id: item.local_id, status: 'synced', server_id: newId, server_version: 1 }
 }
 
@@ -261,6 +315,9 @@ export async function processPushItem(env: Env, item: PushItem, user: UserPayloa
   if (!config || config.capability !== 'full') {
     return { local_id: item.local_id, status: 'error', error: 'Unknown entity type' }
   }
+  if (config.disabledActions?.includes(item.action)) {
+    return { local_id: item.local_id, status: 'error', error: 'ACTION_NOT_SUPPORTED' }
+  }
   switch (item.action) {
     case 'create': return processCreate(env, config, item, user)
     case 'update': return processUpdate(env, config, item, user)
@@ -299,6 +356,13 @@ async function pullEntity(
   env: Env, user: UserPayload, config: EntitySyncConfig, since: string, cursor: string | null, limit: number
 ): Promise<PullEntityResult> {
   const idCol = config.idColumn ?? 'id'
+
+  // Scope 'custom' (mis. absensi: kamar murni tanpa kelas) tidak bisa
+  // diterjemahkan jadi klausa SQL generik — difilter di JS per baris.
+  if (config.scope.kind === 'custom') {
+    return pullEntityWithCustomScope(env, user, config, since, cursor, limit)
+  }
+
   let scopeClause = ''
   let scopeParams: unknown[] = []
 
@@ -319,8 +383,7 @@ async function pullEntity(
   } else if (config.scope.kind === 'role-only') {
     if (!config.scope.roles.includes(user.role)) return { rows: [], nextCursor: null }
   }
-  // 'global' dan 'custom' → tanpa filter tambahan di jalur pull generik ini
-  // (entity yang butuh filter JS-side custom belum ada di fase ini).
+  // 'global' → tanpa filter tambahan.
 
   let query = `SELECT ${config.table}.*${config.pull.selectExtra ? ', ' + config.pull.selectExtra : ''} FROM ${config.table} ${config.pull.joinExtra ?? ''} WHERE ${config.table}.${config.pull.timestampColumn} > ?`
   const params: unknown[] = [since]
@@ -342,6 +405,49 @@ async function pullEntity(
   return { rows, nextCursor }
 }
 
+/**
+ * Pull untuk entity berscope 'custom' — ambil batch kandidat (lebih besar dari
+ * `limit` supaya baris yang gagal filter scope tidak bikin halaman jadi
+ * kosong), lalu saring per baris lewat checkScopeRule yang sama dipakai push.
+ * Cursor lanjut dari baris TERAKHIR YANG DIPERIKSA (bukan cuma yang lolos),
+ * supaya baris yang gagal scope tidak diperiksa ulang tiap pull berikutnya.
+ */
+async function pullEntityWithCustomScope(
+  env: Env, user: UserPayload, config: EntitySyncConfig, since: string, cursor: string | null, limit: number
+): Promise<PullEntityResult> {
+  const idCol = config.idColumn ?? 'id'
+  const fetchSize = Math.min(limit * 5, 1000)
+
+  let query = `SELECT ${config.table}.*${config.pull.selectExtra ? ', ' + config.pull.selectExtra : ''} FROM ${config.table} ${config.pull.joinExtra ?? ''} WHERE ${config.table}.${config.pull.timestampColumn} > ?`
+  const params: unknown[] = [since]
+  if (cursor) {
+    query += ` AND ${config.table}.${idCol} > ?`
+    params.push(cursor)
+  }
+  query += ` ORDER BY ${config.table}.${idCol} ASC LIMIT ?`
+  params.push(fetchSize)
+
+  const result = await env.DB.prepare(query).bind(...params).all()
+  const candidates = (result.results || []) as Record<string, unknown>[]
+
+  const allowed: unknown[] = []
+  let lastExaminedId: string | null = null
+  for (const row of candidates) {
+    // Cek limit SEBELUM menandai baris ini "sudah diperiksa" — kalau berhenti
+    // di sini, baris ini belum benar-benar diperiksa scope-nya, jadi harus
+    // diperiksa ulang di pull berikutnya (cursor TIDAK maju melewatinya).
+    if (allowed.length >= limit) break
+    lastExaminedId = row[idCol] as string
+    if (await checkScopeRule(env, user, config.scope, row)) {
+      allowed.push(row)
+    }
+  }
+
+  const moreBeyondFetch = candidates.length >= fetchSize
+  const nextCursor = (allowed.length >= limit || moreBeyondFetch) ? lastExaminedId : null
+  return { rows: allowed, nextCursor }
+}
+
 export interface PullResponse {
   changes: Record<string, unknown[]>
   cursors: Record<string, string | null>
@@ -361,7 +467,7 @@ export async function processPull(
     const result = await pullEntity(env, user, config, since, cursors[entityType] ?? null, limit)
     changes[entityType] = result.rows
     nextCursors[entityType] = result.nextCursor
-    if (result.rows.length >= limit) hasMore = true
+    if (result.nextCursor !== null) hasMore = true
   }
 
   return { changes, cursors: nextCursors, has_more: hasMore, server_time: new Date().toISOString() }

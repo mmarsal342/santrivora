@@ -70,6 +70,10 @@ export interface EntitySyncConfig {
   idColumn?: string
   /** contoh absensi: ['santri_id','tanggal','kegiatan_id'] → upsert-on-create */
   naturalKey?: string[]
+  /** kolom di naturalKey yang nullable — dicocokkan pakai COALESCE(col,'') = COALESCE(?,''). */
+  naturalKeyNullable?: string[]
+  /** action push yang sengaja belum didukung entity ini (mis. absensi belum ada endpoint delete). */
+  disabledActions?: Array<'create' | 'update' | 'delete'>
   createSchema: z.ZodType<any>
   updateSchema: z.ZodType<any>
   /** SATU whitelist, dipakai push-update DAN conflict-resolve merged_data */
