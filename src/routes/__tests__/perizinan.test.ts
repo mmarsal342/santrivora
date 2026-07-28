@@ -238,7 +238,7 @@ describe('perizinan.ts — edit & batalkan hanya selama status diajukan', () => 
     expect(editFail.status).toBe(400)
   })
 
-  it('bisa dibatalkan (DELETE) selama masih diajukan', async () => {
+  it('bisa dibatalkan (DELETE) selama masih diajukan — soft-delete (fase 6 offline-first), bukan hard delete', async () => {
     const kamar = await seedKamar({ jenis_kelamin: 'L' })
     const admin = await seedUser({ role: 'admin' })
     const santri = await seedSantri({ jenis_kelamin: 'L', kamar_id: kamar })
@@ -252,8 +252,14 @@ describe('perizinan.ts — edit & batalkan hanya selama status diajukan', () => 
     }, testEnv())
     expect(res.status).toBe(200)
 
-    const row = await testEnv().DB.prepare('SELECT id FROM perizinan_pulang WHERE id = ?').bind(body.data.id).first()
-    expect(row).toBeNull()
+    // Soft-delete (tombstone) — baris tetap ADA tapi is_deleted=1, supaya
+    // pembatalan ke-propagate ke sync pull. Tidak lagi muncul di GET /.
+    const row = await testEnv().DB.prepare('SELECT is_deleted FROM perizinan_pulang WHERE id = ?').bind(body.data.id).first<{ is_deleted: number }>()
+    expect(row?.is_deleted).toBe(1)
+
+    const list = await perizinanRoutes.request('/', { headers: authHeaders(admin.accessToken) }, testEnv())
+    const listBody = await list.json() as { data: Array<{ id: string }> }
+    expect(listBody.data.find((p) => p.id === body.data.id)).toBeUndefined()
   })
 })
 

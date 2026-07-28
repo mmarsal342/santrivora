@@ -60,11 +60,34 @@ export interface TransitionRule {
   to: string
   scope: ScopeRule
   invalidTransitionCode: string
+  /**
+   * Kolom TAMBAHAN (di luar `field` sendiri) yang boleh ditulis transisi ini
+   * DARI PATCH CLIENT (mis. kembali menulis tanggal_kembali_aktual). PENTING:
+   * saat transisi ini match, HANYA `field` + writeFields yang dipakai untuk
+   * UPDATE — BUKAN config.writableColumns biasa. Ini yang mencegah patch
+   * transisi menyelundupkan edit ke field lain (dan mencegah field-field
+   * transisi ini ditulis lewat update BUKAN-transisi, kalau field ini sengaja
+   * tidak dimasukkan ke config.writableColumns).
+   */
+  writeFields?: string[]
+  /**
+   * Kolom tambahan yang nilainya BUKAN dari patch client (mis. approve:
+   * disetujui_oleh = user.sub, bukan dari payload).
+   */
+  extra?: (patch: Record<string, unknown>, user: UserPayload) => Record<string, unknown>
+  /**
+   * Validasi tambahan KHUSUS transisi ini (mis. tolak mewajibkan
+   * catatan_keputusan diisi, sedangkan approve tidak) — dijalankan setelah
+   * transition legality (`from`) lolos, sebelum version-check. Return kode
+   * error atau null.
+   */
+  validate?: (patch: Record<string, unknown>) => string | null
   afterWrite?: (
     env: Env,
     id: string,
     before: Record<string, unknown>,
-    after: Record<string, unknown>
+    after: Record<string, unknown>,
+    user: UserPayload
   ) => Promise<void>
 }
 
@@ -139,6 +162,21 @@ export interface EntitySyncConfig {
    */
   customWriteCheck?: (env: Env, user: UserPayload, current: Record<string, unknown>) => Promise<string | null>
   refValidations?: RefValidation[]
+  /**
+   * Batasi UPDATE non-transisi (edit field biasa, bukan lewat TransitionRule)
+   * cuma boleh terjadi selama `current[field]` ada di `values` — mis.
+   * perizinan_pulang cuma bisa diedit bebas selama status='diajukan'. DELETE
+   * juga tunduk aturan yang sama. Diabaikan sepenuhnya kalau update ini
+   * match salah satu TransitionRule (transisi punya aturan `from` sendiri).
+   */
+  editGuard?: { field: string; values: string[]; invalidCode: string }
+  /**
+   * Validasi cross-field terhadap data GABUNGAN (current + patch) yang tidak
+   * bisa diekspresikan lewat RefValidation (bukan soal FK-existence, misal
+   * urutan tanggal). Dipanggil di UPDATE (transisi maupun bukan) setelah ref
+   * validation, sebelum apply. Return kode error atau null.
+   */
+  validateMerged?: (current: Record<string, unknown>, patch: Record<string, unknown>) => string | null
   transitions?: TransitionRule[]
   afterWrite?: (
     env: Env,
