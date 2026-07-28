@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, watch } from 'vue'
-import { kamarService } from '@/services'
+import { ref, reactive, computed } from 'vue'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
 import EmptyState from '@/components/EmptyState.vue'
 
 interface Kamar {
@@ -8,12 +9,15 @@ interface Kamar {
   nama: string
   jenis_kelamin: 'L' | 'P'
   kapasitas?: number | null
-  jumlah_santri?: number
   is_active?: number
 }
 
-const list = ref<Kamar[]>([])
-const loading = ref(false)
+interface Santri {
+  id: string
+  kamar_id: string | null
+  status: string
+}
+
 const error = ref('')
 const modalOpen = ref(false)
 const editingId = ref<string | null>(null)
@@ -21,6 +25,28 @@ const submitting = ref(false)
 const deleteTarget = ref<Kamar | null>(null)
 const deleteWarning = ref('')
 const filterStatus = ref<'aktif' | 'nonaktif' | 'semua'>('aktif')
+
+// kamar entity 'pull-only' — baca dari cache Dexie (kamar.ts REST tetap
+// dipakai buat tulis, lihat useEntityMutation di bawah). jumlah_santri yang
+// dulu didapat lewat JOIN server sekarang dihitung client-side dari cache
+// santri yang SUDAH ikut ke-pull juga (mirror kamar.ts: count santri
+// status='aktif' per kamar_id) — nol request tambahan.
+const { items: list, loading } = useEntityList<Kamar>('kamar', {
+  filter: (k) => (filterStatus.value === 'semua' ? true : filterStatus.value === 'aktif' ? k.is_active !== 0 : k.is_active === 0),
+  sort: (a, b) => a.nama.localeCompare(b.nama),
+  pageSize: 1000
+})
+const { allItems: allSantri } = useEntityList<Santri>('santri')
+const jumlahSantriByKamar = computed(() => {
+  const map = new Map<string, number>()
+  for (const s of allSantri.value) {
+    if (s.status !== 'aktif' || !s.kamar_id) continue
+    map.set(s.kamar_id, (map.get(s.kamar_id) ?? 0) + 1)
+  }
+  return map
+})
+
+const mutation = useEntityMutation<Kamar>('kamar')
 
 const form = reactive({
   nama: '',
@@ -36,21 +62,6 @@ function resetForm() {
   form.is_active = true
   editingId.value = null
 }
-
-async function fetchList() {
-  loading.value = true
-  error.value = ''
-  try {
-    list.value = (await kamarService.list({ status: filterStatus.value })) as Kamar[]
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal memuat kamar'
-  } finally {
-    loading.value = false
-  }
-}
-
-watch(filterStatus, fetchList)
 
 function openCreate() {
   error.value = ''
@@ -82,13 +93,12 @@ async function submit() {
     if (form.kapasitas !== '') payload.kapasitas = Number(form.kapasitas)
     if (editingId.value) {
       payload.is_active = form.is_active ? 1 : 0
-      await kamarService.update(editingId.value, payload)
+      await mutation.update(editingId.value, payload)
     } else {
-      await kamarService.create(payload as { nama: string; jenis_kelamin: 'L' | 'P'; kapasitas?: number })
+      await mutation.create(payload)
     }
     modalOpen.value = false
     resetForm()
-    await fetchList()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal menyimpan kamar'
@@ -99,25 +109,23 @@ async function submit() {
 
 function confirmDelete(k: Kamar) {
   deleteTarget.value = k
+  const jumlah = jumlahSantriByKamar.value.get(k.id) ?? 0
   deleteWarning.value =
-    (k.jumlah_santri ?? 0) > 0
-      ? `Kamar ini memiliki ${k.jumlah_santri} santri. Yakin ingin menghapus?`
+    jumlah > 0
+      ? `Kamar ini memiliki ${jumlah} santri. Yakin ingin menghapus?`
       : 'Yakin ingin menghapus kamar ini?'
 }
 
 async function doDelete() {
   if (!deleteTarget.value) return
   try {
-    await kamarService.remove(deleteTarget.value.id)
-    list.value = list.value.filter((k) => k.id !== deleteTarget.value!.id)
+    await mutation.remove(deleteTarget.value.id)
     deleteTarget.value = null
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal menghapus kamar'
   }
 }
-
-onMounted(fetchList)
 </script>
 
 <template>
@@ -180,7 +188,7 @@ onMounted(fetchList)
               <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">{{ k.nama }}</td>
               <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-600">{{ k.jenis_kelamin === 'P' ? 'Putri' : 'Putra' }}</td>
               <td class="hidden whitespace-nowrap px-4 py-3 text-sm text-gray-600 sm:table-cell">{{ k.kapasitas ?? '-' }}</td>
-              <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-600">{{ k.jumlah_santri ?? 0 }}</td>
+              <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-600">{{ jumlahSantriByKamar.get(k.id) ?? 0 }}</td>
               <td class="px-4 py-3">
                 <span
                   :class="[

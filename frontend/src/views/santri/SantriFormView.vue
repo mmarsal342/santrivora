@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { santriService, kelasService, kamarService } from '@/services'
+import { kelasService } from '@/services'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityDetail } from '@/offline/composables/useEntityDetail'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
 
 interface Kelas {
   id: string
@@ -14,6 +17,19 @@ interface Kamar {
   jenis_kelamin: 'L' | 'P'
 }
 
+interface SantriRow {
+  id: string
+  nama_lengkap: string
+  jenis_kelamin: 'L' | 'P'
+  kelas_id?: string | null
+  kamar_id?: string | null
+  angkatan?: string | number | null
+  tanggal_masuk?: string | null
+  tanggal_lahir?: string | null
+  love_language?: string | null
+  status?: string
+}
+
 const route = useRoute()
 const router = useRouter()
 
@@ -21,10 +37,21 @@ const isEdit = computed(() => route.name === 'santri-edit')
 const editId = computed(() => (route.params.id ? String(route.params.id) : ''))
 
 const kelasOptions = ref<Kelas[]>([])
-const kamarOptions = ref<Kamar[]>([])
-const loading = ref(false)
+// kamar sudah ke-cache (pull-only) — dropdown ini instan & jalan offline.
+// kelas BELUM (masih gelombang 1), jadi dropdown kelas tetap network-only
+// lewat kelasService seperti sebelumnya — batasan yang disengaja, dicatat di
+// PR, bukan kelewat.
+const { allItems: kamarOptions } = useEntityList<Kamar>('kamar')
 const submitting = ref(false)
 const serverError = ref('')
+
+const { item: santriDetail, loading: detailLoading } = useEntityDetail<SantriRow>(
+  'santri',
+  computed(() => (isEdit.value ? editId.value : undefined))
+)
+const mutation = useEntityMutation<SantriRow>('santri')
+const loading = computed(() => isEdit.value && detailLoading.value)
+const notFoundInCache = computed(() => isEdit.value && !detailLoading.value && !santriDetail.value)
 
 const form = reactive({
   nama_lengkap: '',
@@ -91,42 +118,37 @@ async function loadKelas() {
   }
 }
 
-async function loadKamar() {
-  try {
-    kamarOptions.value = (await kamarService.list()) as Kamar[]
-    if (!isEdit.value && kamarOptions.value.length === 1 && !form.kamar_id) {
-      form.kamar_id = kamarOptions.value[0].id
-      form.jenis_kelamin = kamarOptions.value[0].jenis_kelamin
-    }
-  } catch {
-    kamarOptions.value = []
+// Auto-pilih kamar kalau cuma ada satu — sekali aja, pas mode create dan
+// cache kamar udah kebaca (biasanya instan karena pull-only sudah ke-cache).
+let autoKamarPicked = false
+watch(kamarOptions, (opts) => {
+  if (isEdit.value || autoKamarPicked || form.kamar_id) return
+  if (opts.length === 1) {
+    autoKamarPicked = true
+    form.kamar_id = opts[0].id
+    form.jenis_kelamin = opts[0].jenis_kelamin
   }
-}
+}, { immediate: true })
 
-async function loadSantri() {
-  if (!isEdit.value) {
-    form.tanggal_masuk = today
-    return
-  }
-  loading.value = true
-  try {
-    const s = await santriService.get(editId.value)
-    form.nama_lengkap = s.nama_lengkap ?? ''
-    form.jenis_kelamin = (s.jenis_kelamin as 'L' | 'P') ?? 'L'
-    form.kelas_id = s.kelas?.id ?? s.kelas_id ?? ''
-    form.kamar_id = s.kamar?.id ?? s.kamar_id ?? ''
-    form.angkatan = s.angkatan != null ? String(s.angkatan) : ''
-    form.tanggal_masuk = s.tanggal_masuk ? s.tanggal_masuk.slice(0, 10) : ''
-    form.tanggal_lahir = s.tanggal_lahir ? s.tanggal_lahir.slice(0, 10) : ''
-    form.love_language = s.love_language ?? ''
-    form.status = s.status ?? 'aktif'
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    serverError.value = err?.response?.data?.message || 'Gagal memuat data santri.'
-  } finally {
-    loading.value = false
-  }
-}
+// Isi form dari cache Dexie (via useEntityDetail) SEKALI begitu data pertama
+// kali tersedia — SENGAJA tidak terus-menerus reaktif ke perubahan susulan
+// (mis. pull background merefresh baris ini) biar gak menimpa edit yang lagi
+// diketik user.
+let formPopulated = false
+watch(santriDetail, (s) => {
+  if (!s || formPopulated) return
+  formPopulated = true
+  form.nama_lengkap = s.nama_lengkap ?? ''
+  form.jenis_kelamin = s.jenis_kelamin ?? 'L'
+  form.kelas_id = s.kelas_id ?? ''
+  form.kamar_id = s.kamar_id ?? ''
+  form.angkatan = s.angkatan != null ? String(s.angkatan) : ''
+  form.tanggal_masuk = s.tanggal_masuk ? s.tanggal_masuk.slice(0, 10) : ''
+  form.tanggal_lahir = s.tanggal_lahir ? s.tanggal_lahir.slice(0, 10) : ''
+  form.love_language = s.love_language ?? ''
+  form.status = s.status ?? 'aktif'
+  initialLoadDone.value = true
+}, { immediate: true })
 
 async function submit() {
   serverError.value = ''
@@ -146,15 +168,16 @@ async function submit() {
 
   submitting.value = true
   try {
-    let savedId: string
     if (isEdit.value) {
-      const updated = await santriService.update(editId.value, payload)
-      savedId = (updated as { id: string }).id || editId.value
+      await mutation.update(editId.value, payload)
     } else {
-      const created = await santriService.create(payload)
-      savedId = (created as { id: string }).id
+      await mutation.create(payload)
     }
-    router.push({ name: 'santri-detail', params: { id: savedId } })
+    // Balik ke daftar (bukan ke halaman detail) — SantriDetailView belum
+    // dimigrasi ke cache offline (masih network-only, gelombang berikutnya),
+    // jadi lompat ke sana bisa gagal kalau lagi offline padahal save-nya
+    // sendiri sudah berhasil (optimistic, tersimpan lokal + diantri sync).
+    router.push({ name: 'santri' })
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string; errors?: Record<string, string> } } }
     serverError.value = err?.response?.data?.message || 'Gagal menyimpan data santri.'
@@ -170,8 +193,11 @@ async function submit() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadKelas(), loadKamar(), loadSantri()])
-  initialLoadDone.value = true
+  await loadKelas()
+  if (!isEdit.value) {
+    form.tanggal_masuk = today
+    initialLoadDone.value = true
+  }
 })
 </script>
 
@@ -209,6 +235,11 @@ onMounted(async () => {
       <div class="h-10 rounded bg-slate-200"></div>
       <div class="h-10 rounded bg-slate-100"></div>
       <div class="h-10 rounded bg-slate-100"></div>
+    </div>
+
+    <!-- Belum ada di cache lokal (mis. belum pernah ke-pull, atau id salah) -->
+    <div v-else-if="notFoundInCache" class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+      Data santri ini belum tersedia di cache lokal. Coba sinkronkan dulu selagi online, atau periksa kembali tautannya.
     </div>
 
     <!-- Form -->

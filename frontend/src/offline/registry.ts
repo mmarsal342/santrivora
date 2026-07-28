@@ -33,14 +33,26 @@ export interface EntityConfig<T = unknown> {
    * '&id, kelas_id, kamar_id, updated_at' (& = primary key unik). */
   dexieSchema: string
   eligibility: EntityEligibility
-  /** service dari services/index.ts yang sudah ada — gak ada service baru yang
-   * perlu ditulis, config ini cuma nunjuk ke method mana yang dipetakan ke
-   * list/get/create/update/remove. */
-  service: EntityService<T>
-  /** Bentuk response service.list() — dinormalisasi SEKALI di sync/pull.ts
-   * (fase POC), bukan per-service. 'array': response = T[] langsung.
-   * 'paginated': response = { data: T[], pagination?: {...}, cursor?: ... }. */
-  responseShape: 'array' | 'paginated'
+  /**
+   * Dipakai HANYA oleh entity 'pull-only' — useEntityMutation menulis lewat
+   * service REST ini langsung (butuh online), bukan lewat outbox, karena
+   * entity ini gak push-eligible. Entity 'push-eligible' gak perlu isi field
+   * ini sama sekali (create/update/remove-nya lewat outbox + /api/sync,
+   * bukan manggil service manapun).
+   */
+  service?: EntityService<T>
+  /** Bentuk response service.list() (dipakai fallback pull-only kalau ada) —
+   * 'array': response = T[] langsung. 'paginated': response = { data: T[], pagination?: {...} }. */
+  responseShape?: 'array' | 'paginated'
+  /**
+   * Mirror EntitySyncConfig.softDelete backend — dipakai push.ts buat
+   * merekonsiliasi cache lokal setelah action:'delete' sukses ke-sync:
+   * entity dengan ini di-UPDATE (bukan dihapus) di cache lokal, biar tetap
+   * konsisten dengan state server (soft-deleted, bukan benar-benar hilang) —
+   * penting supaya filter lokal (mis. status='keluar') masih akurat tanpa
+   * perlu pull ulang. Entity tanpa ini dihapus beneran dari cache lokal.
+   */
+  softDelete?: { column: string; setValue: unknown }
 }
 
 const registry = new Map<string, EntityConfig>()

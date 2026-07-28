@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { santriService, kamarService } from '@/services'
 import { useAuthStore } from '@/stores/auth'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
 import EmptyState from '@/components/EmptyState.vue'
 
 interface Santri {
   id: string
   nama_lengkap: string
   jenis_kelamin: 'L' | 'P'
-  kamar?: { id: string; nama: string }
-  kamar_nama?: string
+  kelas_id?: string | null
+  kamar_id?: string | null
   angkatan?: string | number
   status: string
 }
@@ -23,12 +24,6 @@ interface Kamar {
 const router = useRouter()
 const auth = useAuthStore()
 
-const items = ref<Santri[]>([])
-const kamarOptions = ref<Kamar[]>([])
-const loading = ref(true)
-const loadingMore = ref(false)
-const error = ref('')
-
 const search = ref('')
 const filterKamar = ref('')
 const filterKelamin = ref('')
@@ -39,11 +34,9 @@ const filterKelamin = ref('')
 const filterStatus = ref('aktif')
 const sortMode = ref<'nama' | 'kelas' | 'kamar'>('nama')
 
-const cursor = ref<string | undefined>(undefined)
-const hasMore = ref(false)
-
 const deleteTarget = ref<Santri | null>(null)
 const deleting = ref(false)
+const error = ref('')
 
 const statusLabels: Record<string, string> = {
   aktif: 'Aktif',
@@ -59,50 +52,59 @@ const statusBadge: Record<string, string> = {
   keluar: 'bg-slate-100 text-slate-600 ring-slate-200',
 }
 
-const filtered = computed(() => items.value)
-
 function kelaminLabel(k: string) {
   return k === 'L' ? 'Laki-laki' : k === 'P' ? 'Perempuan' : k
 }
 
-async function loadKamar() {
-  try {
-    kamarOptions.value = await kamarService.list()
-  } catch {
-    kamarOptions.value = []
-  }
-}
+// kamar sudah ke-cache (pull-only, lihat KamarListView) — dipakai buat
+// dropdown filter DAN buat resolve nama kamar per baris santri, keduanya
+// tanpa network tambahan sama sekali.
+const { allItems: kamarOptions } = useEntityList<Kamar>('kamar')
+const kamarNameById = computed(() => new Map(kamarOptions.value.map((k) => [k.id, k.nama])))
 
-async function fetchList(append = false) {
-  if (!append) loading.value = true
-  else loadingMore.value = true
-  if (!append) error.value = ''
-  try {
-    const params: Record<string, string | number | undefined> = { limit: 20, sort: sortMode.value }
-    if (filterKamar.value) params.kamar_id = filterKamar.value
-    if (filterKelamin.value) params.jenis_kelamin = filterKelamin.value
-    if (filterStatus.value) params.status = filterStatus.value
-    if (search.value.trim()) params.q = search.value.trim()
-    if (append && cursor.value) params.cursor = cursor.value
+// Semua filter/search/sort di bawah sengaja jadi FUNGSI LOKAL di atas cache
+// yang sudah lengkap ke-pull (bukan query param ke server lagi) — "load
+// more" jadi window paginasi lokal (lihat useEntityList), instan &jalan
+// walau offline. kelas_id BELUM bisa di-resolve jadi nama (entity kelas
+// masih menyusul di gelombang 1) — sort 'kelas' sementara ngegroup per
+// kelas_id mentah, bukan alfabetis per nama kelas.
+const {
+  items: filtered,
+  loading,
+  hasMoreLocal,
+  loadMore,
+  resetWindow
+} = useEntityList<Santri>('santri', {
+  filter: (s) => {
+    if (filterStatus.value && s.status !== filterStatus.value) return false
+    if (filterKamar.value && s.kamar_id !== filterKamar.value) return false
+    if (filterKelamin.value && s.jenis_kelamin !== filterKelamin.value) return false
+    const q = search.value.trim().toLowerCase()
+    if (q && !s.nama_lengkap.toLowerCase().includes(q)) return false
+    return true
+  },
+  sort: (a, b) => {
+    if (sortMode.value === 'kelas') {
+      return (a.kelas_id ?? '').localeCompare(b.kelas_id ?? '') || a.nama_lengkap.localeCompare(b.nama_lengkap)
+    }
+    if (sortMode.value === 'kamar') {
+      const namaA = kamarNameById.value.get(a.kamar_id ?? '') ?? ''
+      const namaB = kamarNameById.value.get(b.kamar_id ?? '') ?? ''
+      return namaA.localeCompare(namaB) || a.nama_lengkap.localeCompare(b.nama_lengkap)
+    }
+    return a.nama_lengkap.localeCompare(b.nama_lengkap)
+  },
+  pageSize: 20
+})
 
-    const res = await santriService.list(params)
-    const data = res.data as Santri[]
-    const pagination = res.pagination as { cursor?: string; hasMore?: boolean }
-    items.value = append ? [...items.value, ...data] : data
-    cursor.value = pagination?.cursor
-    hasMore.value = !!pagination?.hasMore
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal memuat data santri.'
-  } finally {
-    loading.value = false
-    loadingMore.value = false
-  }
-}
+const mutation = useEntityMutation<Santri>('santri')
 
-function loadMore() {
-  if (hasMore.value && !loadingMore.value) fetchList(true)
-}
+// Filter/sort berubah -> mulai lagi dari halaman pertama window paginasi
+// lokal (mirror reset cursor lama), bukan nyambung dari posisi scroll filter
+// SEBELUMNYA.
+watch([search, filterKamar, filterKelamin, filterStatus, sortMode], () => {
+  resetWindow()
+})
 
 function resetFilters() {
   search.value = ''
@@ -110,21 +112,8 @@ function resetFilters() {
   filterKelamin.value = ''
   filterStatus.value = 'aktif'
   sortMode.value = 'nama'
+  resetWindow()
 }
-
-watch([filterKamar, filterKelamin, filterStatus, sortMode], () => {
-  cursor.value = undefined
-  fetchList(false)
-})
-
-let searchTimer: ReturnType<typeof setTimeout> | null = null
-watch(search, () => {
-  if (searchTimer) clearTimeout(searchTimer)
-  searchTimer = setTimeout(() => {
-    cursor.value = undefined
-    fetchList(false)
-  }, 300)
-})
 
 function confirmDelete(s: Santri) {
   deleteTarget.value = s
@@ -134,8 +123,7 @@ async function doDelete() {
   if (!deleteTarget.value) return
   deleting.value = true
   try {
-    await santriService.remove(deleteTarget.value.id)
-    items.value = items.value.filter((s) => s.id !== deleteTarget.value!.id)
+    await mutation.remove(deleteTarget.value.id)
     deleteTarget.value = null
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
@@ -144,11 +132,6 @@ async function doDelete() {
     deleting.value = false
   }
 }
-
-onMounted(() => {
-  loadKamar()
-  fetchList(false)
-})
 </script>
 
 <template>
@@ -295,7 +278,7 @@ onMounted(() => {
                 </div>
               </td>
               <td class="px-5 py-3 text-slate-600">{{ kelaminLabel(s.jenis_kelamin) }}</td>
-              <td class="px-5 py-3 text-slate-600">{{ s.kamar?.nama ?? s.kamar_nama ?? '-' }}</td>
+              <td class="px-5 py-3 text-slate-600">{{ kamarNameById.get(s.kamar_id ?? '') ?? '-' }}</td>
               <td class="px-5 py-3 text-slate-600">{{ s.angkatan ?? '-' }}</td>
               <td class="px-5 py-3">
                 <span
@@ -357,18 +340,13 @@ onMounted(() => {
       @action="router.push({ name: 'santri-new' })"
     />
 
-    <!-- Load more -->
-    <div v-if="hasMore && !loading" class="flex justify-center">
+    <!-- Load more (window paginasi lokal — instan, gak nunggu network) -->
+    <div v-if="hasMoreLocal && !loading" class="flex justify-center">
       <button
         @click="loadMore"
-        :disabled="loadingMore"
-        class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
       >
-        <svg v-if="loadingMore" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-        </svg>
-        {{ loadingMore ? 'Memuat...' : 'Muat lebih banyak' }}
+        Muat lebih banyak
       </button>
     </div>
 

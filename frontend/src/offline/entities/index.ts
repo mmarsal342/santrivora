@@ -3,3 +3,4 @@
 // 1 baris import di sini — db.ts membaca registry ini otomatis buat bangun
 // schema Dexie, gak ada tempat lain yang perlu disentuh.
 import './kamar.config'
+import './santri.config'
