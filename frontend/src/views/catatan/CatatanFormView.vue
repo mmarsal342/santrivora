@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { catatanService, santriService, kategoriService } from '@/services'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
 
 interface Santri {
   id: string
   nama_lengkap: string
-  nis?: string
-  kelas_nama?: string
+  kelas_id: string | null
+  status: string
+}
+
+interface Kelas {
+  id: string
+  nama: string
 }
 
 interface Kategori {
@@ -15,10 +21,25 @@ interface Kategori {
   nama: string
 }
 
+interface SantriOption {
+  id: string
+  nama_lengkap: string
+  kelas_nama?: string
+}
+
 const router = useRouter()
-const santriList = ref<Santri[]>([])
-const kategoriList = ref<Kategori[]>([])
-const loading = ref(false)
+
+const { allItems: allSantri } = useEntityList<Santri>('santri')
+const { allItems: kelasOptionsRaw } = useEntityList<Kelas>('kelas')
+const { allItems: kategoriList } = useEntityList<Kategori>('kategori_pelanggaran')
+const kelasNameById = computed(() => new Map(kelasOptionsRaw.value.map((k) => [k.id, k.nama])))
+const santriList = computed<SantriOption[]>(() =>
+  allSantri.value
+    .filter((s) => s.status === 'aktif')
+    .map((s) => ({ id: s.id, nama_lengkap: s.nama_lengkap, kelas_nama: s.kelas_id ? kelasNameById.value.get(s.kelas_id) : undefined }))
+)
+
+const mutation = useEntityMutation('catatan_disiplin')
 const submitting = ref(false)
 const error = ref('')
 const santriSearch = ref('')
@@ -43,32 +64,11 @@ const filteredSantri = computed(() => {
   if (!santriSearch.value) return santriList.value.slice(0, 50)
   const q = santriSearch.value.toLowerCase()
   return santriList.value
-    .filter(
-      (s) =>
-        s.nama_lengkap.toLowerCase().includes(q) ||
-        (s.nis ?? '').toLowerCase().includes(q)
-    )
+    .filter((s) => s.nama_lengkap.toLowerCase().includes(q))
     .slice(0, 50)
 })
 
-async function fetchSantri() {
-  try {
-    const res = await santriService.list({ limit: 500 })
-    santriList.value = res.data ?? []
-  } catch {
-    santriList.value = []
-  }
-}
-
-async function fetchKategori() {
-  try {
-    kategoriList.value = (await kategoriService.list()) as Kategori[]
-  } catch {
-    kategoriList.value = []
-  }
-}
-
-function selectSantri(s: Santri) {
+function selectSantri(s: SantriOption) {
   form.santri_id = s.id
   santriSearch.value = ''
   santriDropdownOpen.value = false
@@ -110,7 +110,7 @@ async function submit() {
     if (form.tipe === 'prestasi' && form.jenis_prestasi.trim()) {
       payload.jenis_prestasi = form.jenis_prestasi.trim()
     }
-    await catatanService.create(payload)
+    await mutation.create(payload)
     router.push({ name: 'catatan' })
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
@@ -119,13 +119,6 @@ async function submit() {
     submitting.value = false
   }
 }
-
-onMounted(() => {
-  loading.value = true
-  Promise.all([fetchSantri(), fetchKategori()]).finally(() => {
-    loading.value = false
-  })
-})
 </script>
 
 <template>
@@ -149,13 +142,7 @@ onMounted(() => {
     </div>
 
     <div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-      <div v-if="loading" class="space-y-4">
-        <div class="h-10 animate-pulse rounded-lg bg-gray-100"></div>
-        <div class="h-10 animate-pulse rounded-lg bg-gray-100"></div>
-        <div class="h-10 animate-pulse rounded-lg bg-gray-100"></div>
-      </div>
-
-      <form v-else class="space-y-5" @submit.prevent="submit">
+      <form class="space-y-5" @submit.prevent="submit">
         <div>
           <label class="mb-1 block text-sm font-medium text-gray-700">Santri <span class="text-red-500">*</span></label>
           <div ref="santriDropdownRef" class="relative">
@@ -181,7 +168,7 @@ onMounted(() => {
                 <input
                   v-model="santriSearch"
                   type="text"
-                  placeholder="Cari nama atau NIS..."
+                  placeholder="Cari nama santri..."
                   class="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                   @click.stop
                 />
@@ -195,7 +182,6 @@ onMounted(() => {
                   class="block w-full px-3 py-2 text-left text-sm transition hover:bg-emerald-50"
                 >
                   <span class="font-medium text-gray-900">{{ s.nama_lengkap }}</span>
-                  <span v-if="s.nis" class="text-gray-400"> · {{ s.nis }}</span>
                   <span v-if="s.kelas_nama" class="block text-xs text-gray-400">{{ s.kelas_nama }}</span>
                 </button>
                 <p v-if="filteredSantri.length === 0" class="px-3 py-4 text-center text-sm text-gray-400">

@@ -1,17 +1,24 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { catatanService, kelasService } from '@/services'
 import { useAuthStore } from '@/stores/auth'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
 
 interface Catatan {
   id: string
+  santri_id: string
   tanggal_kejadian: string
-  santri_nama: string
   tipe: 'pelanggaran' | 'prestasi'
   judul: string
-  kategori_nama?: string
-  dicatat_oleh_nama: string
+  kategori_id?: string | null
+  is_deleted?: number
+}
+
+interface Santri {
+  id: string
+  nama_lengkap: string
+  kelas_id: string | null
 }
 
 interface Kelas {
@@ -20,14 +27,26 @@ interface Kelas {
   tingkatan?: string
 }
 
-const catatanList = ref<Catatan[]>([])
+interface Kategori {
+  id: string
+  nama: string
+}
+
 const auth = useAuthStore()
-const kelasList = ref<Kelas[]>([])
-const loading = ref(false)
-const loadingMore = ref(false)
-const error = ref('')
-const hasMore = ref(false)
-const cursor = ref<string | undefined>(undefined)
+
+// santri & kategori_pelanggaran sudah ke-cache — dipakai buat resolve nama
+// (dulu JOIN server: santri_nama, kategori_nama). dicatat_oleh_nama SENGAJA
+// DIHILANGKAN dari tampilan — itu JOIN ke tabel users, yang gak pernah masuk
+// sync cache sama sekali (personel/users dikecualikan permanen demi alasan
+// keamanan, lihat plan §A.5), dan endpoint GET /api/personel yang bisa kasih
+// nama itu khusus admin/kyai (ustadz bakal 403 kalau dipaksa manggil itu buat
+// sekadar label) — gak ada cara resolve ini client-side utk semua role.
+const { allItems: allSantri } = useEntityList<Santri>('santri')
+const { allItems: kelasList } = useEntityList<Kelas>('kelas')
+const { allItems: kategoriList } = useEntityList<Kategori>('kategori_pelanggaran')
+const santriNameById = computed(() => new Map(allSantri.value.map((s) => [s.id, s.nama_lengkap])))
+const kategoriNameById = computed(() => new Map(kategoriList.value.map((k) => [k.id, k.nama])))
+const santriKelasIdById = computed(() => new Map(allSantri.value.map((s) => [s.id, s.kelas_id])))
 
 const filters = reactive({
   tipe: '',
@@ -36,48 +55,34 @@ const filters = reactive({
   tanggal_sampai: ''
 })
 
-async function fetchKelas() {
-  try {
-    kelasList.value = (await kelasService.list()) as Kelas[]
-  } catch {
-    kelasList.value = []
-  }
-}
+const {
+  items: catatanList,
+  loading,
+  hasMoreLocal,
+  loadMore,
+  resetWindow
+} = useEntityList<Catatan>('catatan_disiplin', {
+  filter: (c) => {
+    if (c.is_deleted) return false
+    if (filters.tipe && c.tipe !== filters.tipe) return false
+    if (filters.kelas_id && santriKelasIdById.value.get(c.santri_id) !== filters.kelas_id) return false
+    if (filters.tanggal_dari && c.tanggal_kejadian < filters.tanggal_dari) return false
+    if (filters.tanggal_sampai && c.tanggal_kejadian > filters.tanggal_sampai) return false
+    return true
+  },
+  sort: (a, b) => b.tanggal_kejadian.localeCompare(a.tanggal_kejadian),
+  pageSize: 20
+})
 
-async function fetchCatatan(reset = false) {
-  if (reset) {
-    cursor.value = undefined
-    catatanList.value = []
-  }
-  loading.value = reset
-  loadingMore.value = !reset
-  error.value = ''
-  try {
-    const params: Record<string, unknown> = { limit: 20 }
-    if (filters.tipe) params.tipe = filters.tipe
-    if (filters.kelas_id) params.kelas_id = filters.kelas_id
-    if (cursor.value) params.cursor = cursor.value
-    if (filters.tanggal_dari) params.tanggal_dari = filters.tanggal_dari
-    if (filters.tanggal_sampai) params.tanggal_sampai = filters.tanggal_sampai
+const mutation = useEntityMutation<Catatan>('catatan_disiplin')
+const error = ref('')
 
-    const res = await catatanService.list(params)
-    catatanList.value = reset ? res.data : [...catatanList.value, ...res.data]
-    cursor.value = res.pagination?.cursor
-    hasMore.value = !!res.pagination?.hasMore
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal memuat catatan'
-  } finally {
-    loading.value = false
-    loadingMore.value = false
-  }
-}
+watch(filters, resetWindow)
 
 async function removeCatatan(id: string) {
   if (!confirm('Hapus catatan ini?')) return
   try {
-    await catatanService.remove(id)
-    catatanList.value = catatanList.value.filter((c) => c.id !== id)
+    await mutation.remove(id)
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal menghapus catatan'
@@ -92,22 +97,12 @@ function formatDate(dateStr: string) {
   })
 }
 
-function applyFilters() {
-  fetchCatatan(true)
-}
-
 function resetFilters() {
   filters.tipe = ''
   filters.kelas_id = ''
   filters.tanggal_dari = ''
   filters.tanggal_sampai = ''
-  fetchCatatan(true)
 }
-
-onMounted(() => {
-  fetchKelas()
-  fetchCatatan(true)
-})
 </script>
 
 <template>
@@ -169,17 +164,10 @@ onMounted(() => {
       <div class="mt-3 flex gap-2">
         <button
           type="button"
-          @click="applyFilters"
-          class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
-        >
-          Terapkan
-        </button>
-        <button
-          type="button"
           @click="resetFilters"
           class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
         >
-          Reset
+          Reset filter
         </button>
       </div>
     </div>
@@ -213,14 +201,13 @@ onMounted(() => {
               <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Tipe</th>
               <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">Judul</th>
               <th class="hidden px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 md:table-cell">Kategori</th>
-              <th class="hidden px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 lg:table-cell">Dicatat Oleh</th>
               <th v-if="!auth.isReadOnly" class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-gray-500">Aksi</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100">
             <tr v-for="c in catatanList" :key="c.id" class="transition hover:bg-gray-50">
               <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-700">{{ formatDate(c.tanggal_kejadian) }}</td>
-              <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">{{ c.santri_nama }}</td>
+              <td class="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">{{ santriNameById.get(c.santri_id) ?? '-' }}</td>
               <td class="px-4 py-3">
                 <span
                   :class="[
@@ -234,8 +221,7 @@ onMounted(() => {
                 </span>
               </td>
               <td class="px-4 py-3 text-sm text-gray-700">{{ c.judul }}</td>
-              <td class="hidden whitespace-nowrap px-4 py-3 text-sm text-gray-600 md:table-cell">{{ c.kategori_nama || '-' }}</td>
-              <td class="hidden whitespace-nowrap px-4 py-3 text-sm text-gray-600 lg:table-cell">{{ c.dicatat_oleh_nama }}</td>
+              <td class="hidden whitespace-nowrap px-4 py-3 text-sm text-gray-600 md:table-cell">{{ c.kategori_id ? (kategoriNameById.get(c.kategori_id) ?? '-') : '-' }}</td>
               <td class="whitespace-nowrap px-4 py-3 text-right">
                 <button
                   v-if="!auth.isReadOnly"
@@ -255,14 +241,13 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="hasMore" class="flex justify-center">
+    <div v-if="hasMoreLocal" class="flex justify-center">
       <button
         type="button"
-        :disabled="loadingMore"
-        @click="fetchCatatan(false)"
-        class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:opacity-50"
+        @click="loadMore"
+        class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
       >
-        {{ loadingMore ? 'Memuat...' : 'Muat Lebih Banyak' }}
+        Muat Lebih Banyak
       </button>
     </div>
   </div>
