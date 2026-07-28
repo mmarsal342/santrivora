@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { santriService, catatanService, kategoriService, catatanHaidService, catatanPerkembanganService, perizinanService } from '@/services'
+import { perizinanService } from '@/services'
 import { useAuthStore } from '@/stores/auth'
+import { useEntityDetail } from '@/offline/composables/useEntityDetail'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
 import EmptyState from '@/components/EmptyState.vue'
 
 const auth = useAuthStore()
@@ -13,53 +16,59 @@ interface Kategori {
   urutan_keparahan?: number
 }
 
-interface Catatan {
+interface Kelas {
   id: string
-  tipe: 'pelanggaran' | 'prestasi'
-  judul: string
-  deskripsi?: string
-  tanggal_kejadian: string
-  kategori?: { id: string; nama: string }
-  kategori_nama?: string
-  jenis_prestasi?: string | null
+  nama: string
 }
 
-interface Santri {
+interface Kamar {
+  id: string
+  nama: string
+  jenis_kelamin: 'L' | 'P'
+}
+
+interface Catatan {
+  id: string
+  santri_id: string
+  tipe: 'pelanggaran' | 'prestasi'
+  judul: string
+  deskripsi?: string | null
+  tanggal_kejadian: string
+  kategori_id?: string | null
+  jenis_prestasi?: string | null
+  is_deleted?: number
+}
+
+interface SantriCache {
   id: string
   nama_lengkap: string
   jenis_kelamin: 'L' | 'P'
-  kelas?: { id: string; nama: string }
-  kelas_nama?: string
-  kamar_nama?: string
-  angkatan?: string | number
+  kelas_id: string | null
+  kamar_id: string | null
+  angkatan?: string | number | null
   status: string
-  tanggal_masuk?: string
+  tanggal_masuk?: string | null
   tanggal_lahir?: string | null
   love_language?: string | null
-  catatan_disiplin?: Catatan[]
 }
 
 interface CatatanHaid {
   id: string
+  santri_id: string
   tanggal: string
   status: 'suci' | 'haid'
   catatan?: string | null
+  is_deleted?: number
 }
 
 interface CatatanPerkembangan {
   id: string
+  santri_id: string
   tanggal: string
   kategori: string
   judul: string
   catatan?: string | null
-  dicatat_oleh_nama?: string
-}
-
-interface Perizinan {
-  id: string
-  tanggal_keluar: string
-  perkiraan_kembali: string | null
-  alasan: string
+  is_deleted?: number
 }
 
 type TabKey = 'disiplin' | 'perkembangan' | 'haid'
@@ -68,11 +77,21 @@ const route = useRoute()
 const router = useRouter()
 const id = String(route.params.id)
 
-const santri = ref<Santri | null>(null)
-const loading = ref(true)
-const error = ref('')
+// Profil santri sekarang dari cache Dexie (reaktif, liveQuery) — bukan
+// santriService.get() langsung lagi. useEntityList lain di bawah (kelas/
+// kamar/kategori/catatan_*) sudah men-trigger pullAll() bersama, jadi entity
+// santri ikut kepull tanpa perlu panggilan terpisah (mirror SantriFormView).
+const { item: santri, loading } = useEntityDetail<SantriCache>('santri', id)
+const notFound = computed(() => !loading.value && !santri.value)
 
-const kategoriList = ref<Kategori[]>([])
+const { allItems: kelasList } = useEntityList<Kelas>('kelas')
+const { allItems: kamarList } = useEntityList<Kamar>('kamar')
+const { allItems: kategoriList } = useEntityList<Kategori>('kategori_pelanggaran')
+const kelasNameById = computed(() => new Map(kelasList.value.map((k) => [k.id, k.nama])))
+const kamarNameById = computed(() => new Map(kamarList.value.map((k) => [k.id, k.nama])))
+const kategoriNameById = computed(() => new Map(kategoriList.value.map((k) => [k.id, k.nama])))
+
+const error = ref('')
 
 const showCatatanModal = ref(false)
 const savingCatatan = ref(false)
@@ -88,16 +107,74 @@ const catatanForm = ref({
   tanggal: today,
 })
 
-const catatanHaidList = ref<CatatanHaid[]>([])
-const loadingHaid = ref(false)
-const haidAccessible = ref(true)
+const activeTab = ref<TabKey>('disiplin')
+
+// ---- Catatan Disiplin (push-eligible sejak gelombang 2) ----
+const catatanMutation = useEntityMutation<Catatan>('catatan_disiplin')
+const { allItems: catatanAll } = useEntityList<Catatan>('catatan_disiplin')
+const sortedCatatan = computed(() =>
+  catatanAll.value
+    .filter((c) => c.santri_id === id && !c.is_deleted)
+    .sort((a, b) => (b.tanggal_kejadian || '').localeCompare(a.tanggal_kejadian || ''))
+)
+
+const jumlahPelanggaran = computed(() => sortedCatatan.value.filter((c) => c.tipe === 'pelanggaran').length)
+const jumlahPrestasi = computed(() => sortedCatatan.value.filter((c) => c.tipe === 'prestasi').length)
+
+const pelanggaranByKategori = computed(() => {
+  const map = new Map<string, number>()
+  for (const c of sortedCatatan.value) {
+    if (c.tipe === 'pelanggaran') {
+      const key = (c.kategori_id ? kategoriNameById.value.get(c.kategori_id) : undefined) ?? 'Lainnya'
+      map.set(key, (map.get(key) ?? 0) + 1)
+    }
+  }
+  const total = jumlahPelanggaran.value || 1
+  return Array.from(map.entries())
+    .map(([nama, jumlah]) => ({ nama, jumlah, persen: Math.round((jumlah / total) * 100) }))
+    .sort((a, b) => b.jumlah - a.jumlah)
+    .slice(0, 5)
+})
+
+const maxKategoriJumlah = computed(() =>
+  pelanggaranByKategori.value.reduce((max, k) => Math.max(max, k.jumlah), 0) || 1
+)
+
+// ---- Catatan Suci/Haid (push-eligible bundel ini) ----
+const haidMutation = useEntityMutation<CatatanHaid>('catatan_haid')
+const { allItems: haidAll } = useEntityList<CatatanHaid>('catatan_haid')
+const sortedCatatanHaid = computed(() =>
+  haidAll.value
+    .filter((h) => h.santri_id === id && !h.is_deleted)
+    .sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''))
+)
 const haidError = ref('')
 const savingHaid = ref(false)
 const haidForm = ref({ tanggal: today, status: 'suci' as 'suci' | 'haid', catatan: '' })
 
-const activeTab = ref<TabKey>('disiplin')
-const perkembanganList = ref<CatatanPerkembangan[]>([])
-const loadingPerkembangan = ref(false)
+// Gerbang TAMPILAN doang (mirror haidAccessCheck backend) — penegakan
+// sungguhan tetap 100% di server (pull cuma balikin baris yang boleh dia
+// lihat, push ditolak scope kalau gak berhak). admin global; KYAI SENGAJA
+// diblokir total (data sensitif, beda dari catatan_disiplin/perkembangan);
+// kepala_asrama cuma asrama putri; ustadz cuma kalau kamar santri ini
+// muncul di cache kamar DIA SENDIRI (pull kamar sudah dibatasi server ke
+// kamar yang dia pegang, lihat resolveKamarScope) dan kamarnya jenis putri.
+const haidAccessible = computed(() => {
+  if (!santri.value || santri.value.jenis_kelamin !== 'P') return false
+  if (auth.user?.role === 'admin') return true
+  if (auth.user?.role === 'kyai') return false
+  if (auth.user?.role === 'kepala_asrama') return auth.user?.asrama_jenis === 'P'
+  return kamarList.value.some((k) => k.id === santri.value?.kamar_id && k.jenis_kelamin === 'P')
+})
+
+// ---- Catatan Perkembangan (push-eligible bundel ini) ----
+const perkembanganMutation = useEntityMutation<CatatanPerkembangan>('catatan_perkembangan')
+const { allItems: perkembanganAll } = useEntityList<CatatanPerkembangan>('catatan_perkembangan')
+const sortedPerkembangan = computed(() =>
+  perkembanganAll.value
+    .filter((c) => c.santri_id === id && !c.is_deleted)
+    .sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''))
+)
 const perkembanganError = ref('')
 const showPerkembanganModal = ref(false)
 const savingPerkembangan = ref(false)
@@ -115,41 +192,6 @@ const statusBadge: Record<string, string> = {
   nonaktif: 'bg-slate-100 text-slate-600 ring-slate-200',
 }
 
-const sortedCatatan = computed(() => {
-  const list = santri.value?.catatan_disiplin ?? []
-  return [...list].sort((a, b) => (b.tanggal_kejadian || '').localeCompare(a.tanggal_kejadian || ''))
-})
-
-const jumlahPelanggaran = computed(() => sortedCatatan.value.filter((c) => c.tipe === 'pelanggaran').length)
-const jumlahPrestasi = computed(() => sortedCatatan.value.filter((c) => c.tipe === 'prestasi').length)
-
-const pelanggaranByKategori = computed(() => {
-  const map = new Map<string, number>()
-  for (const c of sortedCatatan.value) {
-    if (c.tipe === 'pelanggaran') {
-      const key = c.kategori?.nama ?? c.kategori_nama ?? 'Lainnya'
-      map.set(key, (map.get(key) ?? 0) + 1)
-    }
-  }
-  const total = jumlahPelanggaran.value || 1
-  return Array.from(map.entries())
-    .map(([nama, jumlah]) => ({ nama, jumlah, persen: Math.round((jumlah / total) * 100) }))
-    .sort((a, b) => b.jumlah - a.jumlah)
-    .slice(0, 5)
-})
-
-const maxKategoriJumlah = computed(() =>
-  pelanggaranByKategori.value.reduce((max, k) => Math.max(max, k.jumlah), 0) || 1
-)
-
-const sortedCatatanHaid = computed(() =>
-  [...catatanHaidList.value].sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''))
-)
-
-const sortedPerkembangan = computed(() =>
-  [...perkembanganList.value].sort((a, b) => (b.tanggal || '').localeCompare(a.tanggal || ''))
-)
-
 const kategoriPerkembanganStyle: Record<string, string> = {
   Perkembangan: 'bg-emerald-50 text-emerald-700',
   Kesehatan: 'bg-rose-50 text-rose-700',
@@ -163,7 +205,7 @@ function kelaminLabel(k: string) {
   return k === 'L' ? 'Laki-laki' : k === 'P' ? 'Perempuan' : '-'
 }
 
-function formatDate(d?: string) {
+function formatDate(d?: string | null) {
   if (!d) return '-'
   try {
     return new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(d))
@@ -172,38 +214,12 @@ function formatDate(d?: string) {
   }
 }
 
-function formatDateShort(d?: string) {
+function formatDateShort(d?: string | null) {
   if (!d) return ''
   try {
     return new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(d))
   } catch {
     return d
-  }
-}
-
-async function loadSantri() {
-  loading.value = true
-  error.value = ''
-  try {
-    santri.value = await santriService.get(id)
-    await loadCatatanHaid()
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string }; status?: number } }
-    if (err?.response?.status === 404) {
-      error.value = 'Santri tidak ditemukan.'
-    } else {
-      error.value = err?.response?.data?.message || 'Gagal memuat data santri.'
-    }
-  } finally {
-    loading.value = false
-  }
-}
-
-async function loadKategori() {
-  try {
-    kategoriList.value = await kategoriService.list()
-  } catch {
-    kategoriList.value = []
   }
 }
 
@@ -250,9 +266,8 @@ async function submitCatatan() {
     if (catatanForm.value.tipe === 'prestasi' && catatanForm.value.jenis_prestasi.trim()) {
       payload.jenis_prestasi = catatanForm.value.jenis_prestasi.trim()
     }
-    await catatanService.create(payload)
+    await catatanMutation.create(payload)
     showCatatanModal.value = false
-    await loadSantri()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     catatanError.value = err?.response?.data?.message || 'Gagal menambah catatan.'
@@ -261,22 +276,13 @@ async function submitCatatan() {
   }
 }
 
-async function loadCatatanHaid() {
-  if (!santri.value || santri.value.jenis_kelamin !== 'P') return
-  loadingHaid.value = true
-  haidError.value = ''
+async function removeCatatan(catatanId: string) {
+  if (!confirm('Hapus catatan ini?')) return
   try {
-    catatanHaidList.value = await catatanHaidService.list(id)
-    haidAccessible.value = true
+    await catatanMutation.remove(catatanId)
   } catch (e: unknown) {
-    const err = e as { response?: { status?: number; data?: { message?: string } } }
-    if (err?.response?.status === 403) {
-      haidAccessible.value = false
-    } else {
-      haidError.value = err?.response?.data?.message || 'Gagal memuat catatan haid.'
-    }
-  } finally {
-    loadingHaid.value = false
+    const err = e as { response?: { data?: { message?: string } } }
+    error.value = err?.response?.data?.message || 'Gagal menghapus catatan.'
   }
 }
 
@@ -288,14 +294,20 @@ async function submitHaid() {
   }
   savingHaid.value = true
   try {
-    await catatanHaidService.upsert({
-      santri_id: id,
-      tanggal: haidForm.value.tanggal,
-      status: haidForm.value.status,
-      catatan: haidForm.value.catatan.trim() || undefined
-    })
+    // Cek cache lokal dulu (bukan langsung create) — mirror semantik upsert
+    // backend (ON CONFLICT santri_id+tanggal). Ini juga yang mencegah
+    // skenario paling mungkin utk tabrakan natural-key: user yang sama
+    // ngedit entri hari yang sama dua kali sebelum sempat sync (lihat
+        // catatan di push.ts applyResults soal sisa kasus lintas-device yang
+    // jauh lebih jarang).
+    const existing = sortedCatatanHaid.value.find((h) => h.tanggal === haidForm.value.tanggal)
+    const patch = { status: haidForm.value.status, catatan: haidForm.value.catatan.trim() || undefined }
+    if (existing) {
+      await haidMutation.update(existing.id, patch)
+    } else {
+      await haidMutation.create({ santri_id: id, tanggal: haidForm.value.tanggal, ...patch })
+    }
     haidForm.value.catatan = ''
-    await loadCatatanHaid()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     haidError.value = err?.response?.data?.message || 'Gagal menyimpan catatan haid.'
@@ -307,24 +319,10 @@ async function submitHaid() {
 async function removeHaid(haidId: string) {
   if (!confirm('Hapus catatan ini?')) return
   try {
-    await catatanHaidService.remove(haidId)
-    catatanHaidList.value = catatanHaidList.value.filter((h) => h.id !== haidId)
+    await haidMutation.remove(haidId)
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     haidError.value = err?.response?.data?.message || 'Gagal menghapus catatan haid.'
-  }
-}
-
-async function loadPerkembangan() {
-  loadingPerkembangan.value = true
-  perkembanganError.value = ''
-  try {
-    perkembanganList.value = await catatanPerkembanganService.list(id)
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    perkembanganError.value = err?.response?.data?.message || 'Gagal memuat catatan perkembangan.'
-  } finally {
-    loadingPerkembangan.value = false
   }
 }
 
@@ -342,7 +340,7 @@ async function submitPerkembangan() {
   }
   savingPerkembangan.value = true
   try {
-    await catatanPerkembanganService.create({
+    await perkembanganMutation.create({
       santri_id: id,
       tanggal: perkembanganForm.value.tanggal,
       kategori: perkembanganForm.value.kategori,
@@ -350,7 +348,6 @@ async function submitPerkembangan() {
       catatan: perkembanganForm.value.catatan.trim() || undefined,
     })
     showPerkembanganModal.value = false
-    await loadPerkembangan()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     perkembanganError.value = err?.response?.data?.message || 'Gagal menambah catatan perkembangan.'
@@ -362,14 +359,21 @@ async function submitPerkembangan() {
 async function removePerkembangan(catatanId: string) {
   if (!confirm('Hapus catatan ini?')) return
   try {
-    await catatanPerkembanganService.remove(catatanId)
-    perkembanganList.value = perkembanganList.value.filter((c) => c.id !== catatanId)
+    await perkembanganMutation.remove(catatanId)
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     perkembanganError.value = err?.response?.data?.message || 'Gagal menghapus catatan.'
   }
 }
 
+// Izin pulang TETAP network langsung — belum masuk migrasi (gelombang 3,
+// termasuk transisi approve/tolak/kembali, sengaja ditunda ke akhir).
+interface Perizinan {
+  id: string
+  tanggal_keluar: string
+  perkiraan_kembali: string | null
+  alasan: string
+}
 const izinAktif = ref<Perizinan | null>(null)
 const loadingIzin = ref(false)
 const izinError = ref('')
@@ -395,7 +399,6 @@ async function markKembali() {
   try {
     await perizinanService.kembali(izinAktif.value.id)
     izinAktif.value = null
-    await loadPerkembangan()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     izinError.value = err?.response?.data?.message || 'Gagal menandai kembali.'
@@ -404,23 +407,7 @@ async function markKembali() {
   }
 }
 
-async function removeCatatan(catatanId: string) {
-  if (!confirm('Hapus catatan ini?')) return
-  try {
-    await catatanService.remove(catatanId)
-    if (santri.value?.catatan_disiplin) {
-      santri.value.catatan_disiplin = santri.value.catatan_disiplin.filter((c) => c.id !== catatanId)
-    }
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal menghapus catatan.'
-  }
-}
-
 onMounted(() => {
-  loadSantri()
-  loadKategori()
-  loadPerkembangan()
   loadIzinAktif()
 })
 </script>
@@ -440,6 +427,11 @@ onMounted(() => {
 
     <!-- Error -->
     <div v-if="error" class="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{{ error }}</div>
+
+    <!-- Belum ada di cache lokal (mis. belum pernah ke-pull, atau id salah) -->
+    <div v-if="notFound" class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+      Data santri ini belum tersedia di cache lokal. Coba sinkronkan dulu selagi online, atau periksa kembali tautannya.
+    </div>
 
     <!-- Banner: sedang izin pulang -->
     <div v-if="izinAktif" class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
@@ -509,11 +501,11 @@ onMounted(() => {
           <dl class="mt-5 grid grid-cols-2 gap-4 border-t border-slate-100 pt-5 sm:grid-cols-4">
             <div>
               <dt class="text-xs font-medium uppercase tracking-wide text-slate-400">Kelas</dt>
-              <dd class="mt-1 text-sm font-medium text-slate-800">{{ santri.kelas?.nama ?? santri.kelas_nama ?? '-' }}</dd>
+              <dd class="mt-1 text-sm font-medium text-slate-800">{{ santri.kelas_id ? (kelasNameById.get(santri.kelas_id) ?? '-') : '-' }}</dd>
             </div>
             <div>
               <dt class="text-xs font-medium uppercase tracking-wide text-slate-400">Kamar</dt>
-              <dd class="mt-1 text-sm font-medium text-slate-800">{{ santri.kamar_nama ?? '-' }}</dd>
+              <dd class="mt-1 text-sm font-medium text-slate-800">{{ santri.kamar_id ? (kamarNameById.get(santri.kamar_id) ?? '-') : '-' }}</dd>
             </div>
             <div>
               <dt class="text-xs font-medium uppercase tracking-wide text-slate-400">Angkatan</dt>
@@ -627,9 +619,9 @@ onMounted(() => {
                       :class="c.tipe === 'pelanggaran' ? 'bg-rose-50 text-rose-700 ring-rose-600/10' : 'bg-amber-50 text-amber-700 ring-amber-600/10'"
                     >{{ c.tipe === 'pelanggaran' ? 'Pelanggaran' : 'Prestasi' }}</span>
                     <span
-                      v-if="c.kategori?.nama || c.kategori_nama"
+                      v-if="c.kategori_id && kategoriNameById.get(c.kategori_id)"
                       class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600"
-                    >{{ c.kategori?.nama ?? c.kategori_nama }}</span>
+                    >{{ kategoriNameById.get(c.kategori_id) }}</span>
                     <span
                       v-if="c.jenis_prestasi"
                       class="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-600/10"
@@ -685,11 +677,7 @@ onMounted(() => {
         <div class="p-5">
           <div v-if="perkembanganError" class="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ perkembanganError }}</div>
 
-          <div v-if="loadingPerkembangan" class="space-y-2">
-            <div v-for="i in 3" :key="i" class="h-16 animate-pulse rounded-lg bg-slate-100"></div>
-          </div>
-
-          <ol v-else-if="sortedPerkembangan.length" class="relative space-y-6 border-l-2 border-slate-100 pl-6">
+          <ol v-if="sortedPerkembangan.length" class="relative space-y-6 border-l-2 border-slate-100 pl-6">
             <li v-for="c in sortedPerkembangan" :key="c.id" class="relative">
               <span class="absolute -left-[1.95rem] flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 ring-4 ring-white shadow-xs">
                 <svg class="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -721,7 +709,6 @@ onMounted(() => {
                 </div>
                 <h3 class="mt-2.5 text-sm font-bold text-slate-800">{{ c.judul }}</h3>
                 <p v-if="c.catatan" class="mt-1 text-sm text-slate-500 leading-relaxed">{{ c.catatan }}</p>
-                <p v-if="c.dicatat_oleh_nama" class="mt-2 text-xs text-slate-400 italic">— {{ c.dicatat_oleh_nama }}</p>
               </div>
             </li>
           </ol>
@@ -787,10 +774,7 @@ onMounted(() => {
             >{{ savingHaid ? 'Menyimpan...' : 'Simpan' }}</button>
           </form>
 
-          <div v-if="loadingHaid" class="space-y-2">
-            <div v-for="i in 2" :key="i" class="h-10 animate-pulse rounded-lg bg-slate-100"></div>
-          </div>
-          <ul v-else-if="sortedCatatanHaid.length" class="divide-y divide-slate-100 rounded-lg border border-slate-200">
+          <ul v-if="sortedCatatanHaid.length" class="divide-y divide-slate-100 rounded-lg border border-slate-200">
             <li v-for="hRow in sortedCatatanHaid" :key="hRow.id" class="flex items-center justify-between gap-3 px-4 py-2.5">
               <div class="flex items-center gap-3">
                 <span
