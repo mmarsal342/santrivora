@@ -181,6 +181,33 @@ describe('perizinan.ts — alur penuh: ajukan -> approve -> kembali', () => {
     expect(resultBody.data.status).toBe('selesai')
     expect(resultBody.data.tanggal_kembali_aktual).toBe('2026-08-05')
   })
+
+  it('kembali (selesai) otomatis tercatat di catatan_perkembangan santri', async () => {
+    const kamar = await seedKamar({ jenis_kelamin: 'L' })
+    const admin = await seedUser({ role: 'admin' })
+    const santri = await seedSantri({ jenis_kelamin: 'L', kamar_id: kamar })
+
+    const created = await ajukan(admin.accessToken, santri, { tanggal_keluar: '2026-08-01', alasan: 'Acara keluarga besar' })
+    const body = await created.json() as { data: { id: string } }
+    await perizinanRoutes.request(`/${body.data.id}/approve`, {
+      method: 'POST', headers: authHeaders(admin.accessToken), body: JSON.stringify({})
+    }, testEnv())
+    await perizinanRoutes.request(`/${body.data.id}/kembali`, {
+      method: 'POST',
+      headers: authHeaders(admin.accessToken),
+      body: JSON.stringify({ tanggal_kembali_aktual: '2026-08-05' })
+    }, testEnv())
+
+    const catatan = await testEnv().DB.prepare(
+      "SELECT * FROM catatan_perkembangan WHERE santri_id = ? AND judul = 'Izin Pulang'"
+    ).bind(santri).first<{ kategori: string; tanggal: string; catatan: string; dicatat_oleh: string }>()
+    expect(catatan).toBeTruthy()
+    expect(catatan?.kategori).toBe('Keluarga')
+    expect(catatan?.tanggal).toBe('2026-08-01')
+    expect(catatan?.catatan).toContain('Acara keluarga besar')
+    expect(catatan?.catatan).toContain('2026-08-05')
+    expect(catatan?.dicatat_oleh).toBe(admin.id)
+  })
 })
 
 describe('perizinan.ts — edit & batalkan hanya selama status diajukan', () => {

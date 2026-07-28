@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { santriService, catatanService, kategoriService, catatanHaidService, catatanPerkembanganService } from '@/services'
+import { santriService, catatanService, kategoriService, catatanHaidService, catatanPerkembanganService, perizinanService } from '@/services'
 import { useAuthStore } from '@/stores/auth'
 import EmptyState from '@/components/EmptyState.vue'
 
@@ -53,6 +53,13 @@ interface CatatanPerkembangan {
   judul: string
   catatan?: string | null
   dicatat_oleh_nama?: string
+}
+
+interface Perizinan {
+  id: string
+  tanggal_keluar: string
+  perkiraan_kembali: string | null
+  alasan: string
 }
 
 type TabKey = 'disiplin' | 'perkembangan' | 'haid'
@@ -363,6 +370,40 @@ async function removePerkembangan(catatanId: string) {
   }
 }
 
+const izinAktif = ref<Perizinan | null>(null)
+const loadingIzin = ref(false)
+const izinError = ref('')
+const markingKembali = ref(false)
+
+async function loadIzinAktif() {
+  loadingIzin.value = true
+  izinError.value = ''
+  try {
+    const rows = (await perizinanService.list({ santri_id: id, status: 'disetujui' })) as Perizinan[]
+    izinAktif.value = rows[0] ?? null
+  } catch {
+    izinAktif.value = null
+  } finally {
+    loadingIzin.value = false
+  }
+}
+
+async function markKembali() {
+  if (!izinAktif.value) return
+  markingKembali.value = true
+  izinError.value = ''
+  try {
+    await perizinanService.kembali(izinAktif.value.id)
+    izinAktif.value = null
+    await loadPerkembangan()
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    izinError.value = err?.response?.data?.message || 'Gagal menandai kembali.'
+  } finally {
+    markingKembali.value = false
+  }
+}
+
 async function removeCatatan(catatanId: string) {
   if (!confirm('Hapus catatan ini?')) return
   try {
@@ -380,6 +421,7 @@ onMounted(() => {
   loadSantri()
   loadKategori()
   loadPerkembangan()
+  loadIzinAktif()
 })
 </script>
 
@@ -398,6 +440,32 @@ onMounted(() => {
 
     <!-- Error -->
     <div v-if="error" class="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{{ error }}</div>
+
+    <!-- Banner: sedang izin pulang -->
+    <div v-if="izinAktif" class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+      <div class="flex items-start gap-3">
+        <svg class="mt-0.5 h-5 w-5 shrink-0 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3v10.5a3 3 0 01-3 3h-7.5a3 3 0 01-3-3V15m9-9.75v2.25M8.25 5.25v2.25M12 13.5h6.75m-6.75 3h6.75M12 13.5h.008v.008H12V13.5z" />
+        </svg>
+        <div>
+          <p class="text-sm font-semibold text-amber-800">Sedang izin pulang</p>
+          <p class="text-xs text-amber-700">
+            {{ izinAktif.alasan }} — keluar sejak {{ formatDateShort(izinAktif.tanggal_keluar) }}
+            <span v-if="izinAktif.perkiraan_kembali"> · perkiraan kembali {{ formatDateShort(izinAktif.perkiraan_kembali) }}</span>
+          </p>
+          <p v-if="izinError" class="mt-1 text-xs text-rose-600">{{ izinError }}</p>
+        </div>
+      </div>
+      <button
+        v-if="!auth.isReadOnly"
+        type="button"
+        :disabled="markingKembali"
+        @click="markKembali"
+        class="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-700 disabled:opacity-50"
+      >
+        {{ markingKembali ? 'Memproses...' : 'Tandai Kembali' }}
+      </button>
+    </div>
 
     <!-- Loading -->
     <div v-if="loading" class="animate-pulse space-y-4">
