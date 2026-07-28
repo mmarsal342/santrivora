@@ -32,7 +32,11 @@ const error = ref('')
 const search = ref('')
 const filterKamar = ref('')
 const filterKelamin = ref('')
-const filterStatus = ref('')
+// Default 'aktif' (bukan '' / semua) — santri yang di-"Hapus" (soft-delete,
+// status jadi 'keluar') sebelumnya tetap muncul selamanya di daftar default
+// karena tidak ada filter status yang diterapkan. "Semua"/"Keluar"/"Lulus"
+// tetap bisa dipilih eksplisit lewat dropdown kalau memang mau dilihat.
+const filterStatus = ref('aktif')
 const sortMode = ref<'nama' | 'kelas' | 'kamar'>('nama')
 
 const cursor = ref<string | undefined>(undefined)
@@ -104,7 +108,7 @@ function resetFilters() {
   search.value = ''
   filterKamar.value = ''
   filterKelamin.value = ''
-  filterStatus.value = ''
+  filterStatus.value = 'aktif'
   sortMode.value = 'nama'
 }
 
