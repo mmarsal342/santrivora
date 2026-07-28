@@ -88,7 +88,7 @@ catatanHaid.get('/', async (c) => {
   }
 
   const result = await c.env.DB.prepare(
-    'SELECT * FROM catatan_haid WHERE santri_id = ? ORDER BY tanggal DESC LIMIT 100'
+    'SELECT * FROM catatan_haid WHERE santri_id = ? AND is_deleted = 0 ORDER BY tanggal DESC LIMIT 100'
   ).bind(santriId).all()
 
   return c.json({ data: result.results || [] })
@@ -139,7 +139,7 @@ catatanHaid.delete('/:id', requireCanMutate(), async (c) => {
   const user = c.get('user')
 
   const existing = await c.env.DB.prepare(
-    'SELECT * FROM catatan_haid WHERE id = ?'
+    'SELECT * FROM catatan_haid WHERE id = ? AND is_deleted = 0'
   ).bind(id).first<{ santri_id: string }>()
 
   if (!existing) {
@@ -156,7 +156,9 @@ catatanHaid.delete('/:id', requireCanMutate(), async (c) => {
     return c.json(forbidden(access.reason), status)
   }
 
-  await c.env.DB.prepare('DELETE FROM catatan_haid WHERE id = ?').bind(id).run()
+  await c.env.DB.prepare(
+    "UPDATE catatan_haid SET is_deleted = 1, version = version + 1, updated_at = datetime('now') WHERE id = ?"
+  ).bind(id).run()
 
   await c.env.DB.prepare(
     `INSERT INTO audit_log (id, user_id, action, entity_type, entity_id)

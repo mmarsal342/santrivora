@@ -6,6 +6,7 @@ import { kegiatanSyncConfig } from './kegiatan'
 import { jadwalKegiatanSyncConfig } from './jadwalKegiatan'
 import { catatanPerkembanganSyncConfig } from './catatanPerkembangan'
 import { catatanPersonelSyncConfig } from './catatanPersonel'
+import { catatanHaidSyncConfig } from './catatanHaid'
 
 registerEntity(santriSyncConfig)
 registerEntity(catatanDisiplinSyncConfig)
@@ -14,3 +15,4 @@ registerEntity(kegiatanSyncConfig)
 registerEntity(jadwalKegiatanSyncConfig)
 registerEntity(catatanPerkembanganSyncConfig)
 registerEntity(catatanPersonelSyncConfig)
+registerEntity(catatanHaidSyncConfig)
