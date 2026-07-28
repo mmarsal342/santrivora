@@ -83,6 +83,26 @@ async function applyResults(batch: OutboxItem[], results: PushResult[]): Promise
           } else {
             await table.delete(item.localId)
           }
+        } else if (result.server_id && result.server_id !== item.localId) {
+          // Entity naturalKey (mis. catatan_haid, upsert per santri_id+tanggal) —
+          // server nemu baris LAIN yang udah ada duluan dengan natural key sama
+          // (device/sesi lain yang lebih dulu sync offline utk hari yang sama),
+          // jadi balikin id server yang BEDA dari id lokal yang kita generate.
+          // Remap baris cache lokal ke id otoritatif itu — kalau gak, baris lama
+          // nyisa yatim di cache dan bakal dobel begitu pull berikutnya narik
+          // baris asli dari server. (Catatan: kalau ada outbox 'update' lain yang
+          // KEBURU keantri dengan id lokal lama sebelum remap ini — kasus dua
+          // device offline yang sama-sama create+edit hari yang sama sebelum
+          // sempat sync sama sekali — update itu bakal gagal retry terus
+          // ["Record not found on server"] karena id lokalnya udah gak eksis di
+          // server. Ini kegagalan yang KELIHATAN [outbox error, bukan silent
+          // data loss], bukan diselesaikan di sini — di luar skenario realistis
+          // utk fitur ini, lihat catatan di SantriDetailView.submitHaid.)
+          const cached = await table.get(item.localId)
+          await table.delete(item.localId)
+          if (cached) {
+            await table.put({ ...cached, id: result.server_id, version: result.server_version ?? cached.version })
+          }
         } else {
           const cached = await table.get(item.localId)
           if (cached) await table.update(item.localId, { version: result.server_version ?? cached.version })
