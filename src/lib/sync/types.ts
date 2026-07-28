@@ -103,6 +103,27 @@ export interface EntitySyncConfig {
   notFoundCode: string
   /** default = scope, kalau target write (kelas/kamar tujuan) punya aturan beda */
   targetScope?: ScopeRule
+  /**
+   * default = scope untuk UPDATE/DELETE/RESOLVE (baris yang sudah ada) — dipakai
+   * kalau otorisasi tulis LEBIH KETAT dari otorisasi baca (mis. kegiatan: siapa
+   * saja di kelas/kamar itu boleh BACA, tapi cuma admin/kyai/pembuat/kepala_asrama
+   * yang boleh UBAH/HAPUS).
+   */
+  writeScope?: ScopeRule
+  /**
+   * Override create-time authorization SEPENUHNYA — dipakai kalau butuh lebih
+   * dari satu kode error berbeda (bukan cuma satu scopeDeniedCode generik).
+   * Kalau diisi, MENGGANTI checkTargetScopeRule/checkScopeRule biasa saat create.
+   * Return null = boleh, return string = kode error.
+   */
+  customCreateCheck?: (env: Env, user: UserPayload, data: Record<string, unknown>) => Promise<string | null>
+  /**
+   * Override otorisasi UPDATE/DELETE/RESOLVE (baris existing) sepenuhnya —
+   * dipakai kalau aturannya lebih rumit dari satu ScopeRule (mis. kegiatan:
+   * creator-override + kepala_asrama-current-access dengan kode error sendiri).
+   * Kalau diisi, MENGGANTI checkScopeRule/writeScope biasa.
+   */
+  customWriteCheck?: (env: Env, user: UserPayload, current: Record<string, unknown>) => Promise<string | null>
   refValidations?: RefValidation[]
   transitions?: TransitionRule[]
   afterWrite?: (
