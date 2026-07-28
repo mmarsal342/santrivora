@@ -258,6 +258,16 @@ async function processUpdate(env: Env, config: EntitySyncConfig, item: PushItem,
     if (targetScopeErr) return { local_id: item.local_id, status: 'error', error: targetScopeErr }
   }
 
+  // editGuard: entity berbasis status (mis. perizinan_pulang) cuma boleh
+  // diedit bebas selama current[field] ada di values — TIDAK berlaku kalau
+  // update ini match TransitionRule (transisi punya aturan `from` sendiri).
+  if (!transition && config.editGuard) {
+    const val = current[config.editGuard.field] as string
+    if (!config.editGuard.values.includes(val)) {
+      return { local_id: item.local_id, status: 'error', error: config.editGuard.invalidCode }
+    }
+  }
+
   const refErr = await validateRefsForUpdate(env, config.refValidations, current, patch)
   if (refErr) return { local_id: item.local_id, status: 'error', error: refErr }
 
@@ -266,6 +276,15 @@ async function processUpdate(env: Env, config: EntitySyncConfig, item: PushItem,
     if (!transition.from.includes(currentFieldVal)) {
       return { local_id: item.local_id, status: 'error', error: transition.invalidTransitionCode }
     }
+    if (transition.validate) {
+      const err = transition.validate(patch)
+      if (err) return { local_id: item.local_id, status: 'error', error: err }
+    }
+  }
+
+  if (config.validateMerged) {
+    const mergedErr = config.validateMerged(current, patch)
+    if (mergedErr) return { local_id: item.local_id, status: 'error', error: mergedErr }
   }
 
   const currentVersion = current.version as number
@@ -282,12 +301,18 @@ async function processUpdate(env: Env, config: EntitySyncConfig, item: PushItem,
     return { local_id: item.local_id, status: 'error', error: 'INVALID_VERSION' }
   }
 
-  const updateFields = config.writableColumns.filter((f) => patch[f] !== undefined)
-  if (updateFields.length === 0) {
+  // Kalau ini transisi, HANYA field-nya sendiri + writeFields yang dipakai —
+  // BUKAN config.writableColumns biasa. Mencegah patch transisi menyelundup-
+  // kan edit ke field lain, dan mencegah field transisi (status, dst) ditulis
+  // lewat jalur edit-biasa kalau sengaja tidak dimasukkan ke writableColumns.
+  const allowedFields = transition ? [transition.field, ...(transition.writeFields ?? [])] : config.writableColumns
+  const updateFields = allowedFields.filter((f) => patch[f] !== undefined)
+  const transitionExtra = transition?.extra ? transition.extra(patch, user) : {}
+  if (updateFields.length === 0 && Object.keys(transitionExtra).length === 0) {
     return { local_id: item.local_id, status: 'synced', server_id: serverId, server_version: currentVersion + 1 }
   }
-  const sets = updateFields.map((f) => `${f} = ?`).join(', ')
-  const vals = updateFields.map((f) => patch[f])
+  const sets = [...updateFields.map((f) => `${f} = ?`), ...Object.keys(transitionExtra).map((k) => `${k} = ?`)].join(', ')
+  const vals = [...updateFields.map((f) => patch[f]), ...Object.values(transitionExtra)]
   const idCol = config.idColumn ?? 'id'
 
   const stmt = await env.DB.prepare(
@@ -301,9 +326,9 @@ async function processUpdate(env: Env, config: EntitySyncConfig, item: PushItem,
     return persistConflict(env, config, user, serverId, item, currentVersion)
   }
 
-  const after = { ...current, ...patch }
+  const after = { ...current, ...patch, ...transitionExtra }
   if (config.afterWrite) await config.afterWrite(env, 'update', serverId, current, after)
-  if (transition?.afterWrite) await transition.afterWrite(env, serverId, current, after)
+  if (transition?.afterWrite) await transition.afterWrite(env, serverId, current, after, user)
 
   return { local_id: item.local_id, status: 'synced', server_id: serverId, server_version: currentVersion + 1 }
 }
@@ -320,6 +345,13 @@ async function processDelete(env: Env, config: EntitySyncConfig, item: PushItem,
     if (err) return { local_id: item.local_id, status: 'error', error: err }
   } else if (!(await checkScopeRule(env, user, config.writeScope ?? config.scope, current))) {
     return { local_id: item.local_id, status: 'error', error: config.scopeDeniedCode }
+  }
+
+  if (config.editGuard) {
+    const val = current[config.editGuard.field] as string
+    if (!config.editGuard.values.includes(val)) {
+      return { local_id: item.local_id, status: 'error', error: config.editGuard.invalidCode }
+    }
   }
 
   const idCol = config.idColumn ?? 'id'

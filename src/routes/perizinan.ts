@@ -112,7 +112,7 @@ perizinan.get('/', async (c) => {
                  JOIN santri s ON p.santri_id = s.id
                  LEFT JOIN users u1 ON p.diajukan_oleh = u1.id
                  LEFT JOIN users u2 ON p.disetujui_oleh = u2.id
-                 WHERE p.santri_id = ?`
+                 WHERE p.santri_id = ? AND p.is_deleted = 0`
     if (status) { query += ' AND p.status = ?'; params.push(status) }
     query += ' ORDER BY p.tanggal_keluar DESC, p.created_at DESC LIMIT 200'
 
@@ -121,7 +121,7 @@ perizinan.get('/', async (c) => {
   }
 
   // Tanpa santri_id: list scoped by role (mirror pola list santri di santri.ts)
-  const whereParts: string[] = []
+  const whereParts: string[] = ['p.is_deleted = 0']
   const params: unknown[] = []
   if (status) { whereParts.push('p.status = ?'); params.push(status) }
 
@@ -188,7 +188,7 @@ perizinan.put('/:id', requireCanMutate(), zValidator('json', updateSchema), asyn
   const data = c.req.valid('json')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ?').bind(id)
+  const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ? AND is_deleted = 0').bind(id)
     .first<{ santri_id: string; status: string; tanggal_keluar: string; perkiraan_kembali: string | null }>()
   if (!existing) return errorResponse('PERIZINAN_NOT_FOUND', 404)
 
@@ -216,6 +216,7 @@ perizinan.put('/:id', requireCanMutate(), zValidator('json', updateSchema), asyn
     return errorResponse('TANGGAL_KEMBALI_INVALID', 400)
   }
 
+  updates.push('version = version + 1')
   updates.push("updated_at = datetime('now')")
   params.push(id)
 
@@ -241,7 +242,7 @@ perizinan.delete('/:id', requireCanMutate(), async (c) => {
   const id = c.req.param('id')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ?').bind(id).first<{ santri_id: string; status: string }>()
+  const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ? AND is_deleted = 0').bind(id).first<{ santri_id: string; status: string }>()
   if (!existing) return errorResponse('PERIZINAN_NOT_FOUND', 404)
 
   const access = await assertAccess(c.env, user, existing.santri_id)
@@ -249,7 +250,11 @@ perizinan.delete('/:id', requireCanMutate(), async (c) => {
 
   if (existing.status !== 'diajukan') return errorResponse('NOT_DIAJUKAN', 400)
 
-  const stmt = await c.env.DB.prepare("DELETE FROM perizinan_pulang WHERE id = ? AND status = 'diajukan'").bind(id).run()
+  // Soft-delete (is_deleted=1), bukan DELETE FROM — dibutuhkan supaya
+  // pembatalan ke-propagate sebagai tombstone ke sync pull (lihat migrasi 016).
+  const stmt = await c.env.DB.prepare(
+    "UPDATE perizinan_pulang SET is_deleted = 1, version = version + 1, updated_at = datetime('now') WHERE id = ? AND status = 'diajukan'"
+  ).bind(id).run()
   if (stmt.meta.changes === 0) return errorResponse('ALREADY_PROCESSED', 409)
 
   await c.env.DB.prepare(
@@ -267,7 +272,7 @@ perizinan.post('/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zValida
   const user = c.get('user')
 
   const existing = await c.env.DB.prepare(
-    `SELECT p.*, s.kamar_id FROM perizinan_pulang p JOIN santri s ON p.santri_id = s.id WHERE p.id = ?`
+    `SELECT p.*, s.kamar_id FROM perizinan_pulang p JOIN santri s ON p.santri_id = s.id WHERE p.id = ? AND p.is_deleted = 0`
   ).bind(id).first<{ status: string; kamar_id: string | null }>()
   if (!existing) return errorResponse('PERIZINAN_NOT_FOUND', 404)
 
@@ -275,7 +280,7 @@ perizinan.post('/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zValida
   if (existing.status !== 'diajukan') return errorResponse('NOT_DIAJUKAN', 400)
 
   const stmt = await c.env.DB.prepare(
-    `UPDATE perizinan_pulang SET status = 'disetujui', disetujui_oleh = ?, catatan_keputusan = ?, updated_at = datetime('now') WHERE id = ? AND status = 'diajukan'`
+    `UPDATE perizinan_pulang SET status = 'disetujui', disetujui_oleh = ?, catatan_keputusan = ?, version = version + 1, updated_at = datetime('now') WHERE id = ? AND status = 'diajukan'`
   ).bind(user.sub, data.catatan_keputusan || null, id).run()
   if (stmt.meta.changes === 0) return errorResponse('ALREADY_PROCESSED', 409)
 
@@ -295,7 +300,7 @@ perizinan.post('/:id/tolak', requireAnyRole('admin', 'kepala_asrama'), zValidato
   const user = c.get('user')
 
   const existing = await c.env.DB.prepare(
-    `SELECT p.*, s.kamar_id FROM perizinan_pulang p JOIN santri s ON p.santri_id = s.id WHERE p.id = ?`
+    `SELECT p.*, s.kamar_id FROM perizinan_pulang p JOIN santri s ON p.santri_id = s.id WHERE p.id = ? AND p.is_deleted = 0`
   ).bind(id).first<{ status: string; kamar_id: string | null }>()
   if (!existing) return errorResponse('PERIZINAN_NOT_FOUND', 404)
 
@@ -303,7 +308,7 @@ perizinan.post('/:id/tolak', requireAnyRole('admin', 'kepala_asrama'), zValidato
   if (existing.status !== 'diajukan') return errorResponse('NOT_DIAJUKAN', 400)
 
   const stmt = await c.env.DB.prepare(
-    `UPDATE perizinan_pulang SET status = 'ditolak', disetujui_oleh = ?, catatan_keputusan = ?, updated_at = datetime('now') WHERE id = ? AND status = 'diajukan'`
+    `UPDATE perizinan_pulang SET status = 'ditolak', disetujui_oleh = ?, catatan_keputusan = ?, version = version + 1, updated_at = datetime('now') WHERE id = ? AND status = 'diajukan'`
   ).bind(user.sub, data.catatan_keputusan, id).run()
   if (stmt.meta.changes === 0) return errorResponse('ALREADY_PROCESSED', 409)
 
@@ -322,7 +327,7 @@ perizinan.post('/:id/kembali', requireCanMutate(), zValidator('json', kembaliSch
   const data = c.req.valid('json')
   const user = c.get('user')
 
-  const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ?').bind(id)
+  const existing = await c.env.DB.prepare('SELECT * FROM perizinan_pulang WHERE id = ? AND is_deleted = 0').bind(id)
     .first<{ santri_id: string; status: string; tanggal_keluar: string; alasan: string }>()
   if (!existing) return errorResponse('PERIZINAN_NOT_FOUND', 404)
 
@@ -335,7 +340,7 @@ perizinan.post('/:id/kembali', requireCanMutate(), zValidator('json', kembaliSch
   if (tanggalKembaliAktual < existing.tanggal_keluar) return errorResponse('TANGGAL_KEMBALI_INVALID', 400)
 
   const stmt = await c.env.DB.prepare(
-    `UPDATE perizinan_pulang SET status = 'selesai', tanggal_kembali_aktual = ?, updated_at = datetime('now') WHERE id = ? AND status = 'disetujui'`
+    `UPDATE perizinan_pulang SET status = 'selesai', tanggal_kembali_aktual = ?, version = version + 1, updated_at = datetime('now') WHERE id = ? AND status = 'disetujui'`
   ).bind(tanggalKembaliAktual, id).run()
   if (stmt.meta.changes === 0) return errorResponse('ALREADY_PROCESSED', 409)
 
