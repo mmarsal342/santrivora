@@ -21,15 +21,15 @@ export async function checkScopeRule(
       return rule.roles.includes(user.role)
     case 'direct-kamar-kelas': {
       if (user.role === 'admin' || user.role === 'kyai') return true
-      const kamarCol = rule.kamarColumn ?? 'kamar_id'
-      const kelasCol = rule.kelasColumn ?? 'kelas_id'
-      const kamarId = row[kamarCol] as string | null | undefined
-      const kelasId = row[kelasCol] as string | null | undefined
+      const kamarCol = rule.kamarColumn === null ? null : (rule.kamarColumn ?? 'kamar_id')
+      const kelasCol = rule.kelasColumn === null ? null : (rule.kelasColumn ?? 'kelas_id')
+      const kamarId = kamarCol ? (row[kamarCol] as string | null | undefined) : null
+      const kelasId = kelasCol ? (row[kelasCol] as string | null | undefined) : null
       if (user.role === 'kepala_asrama') {
-        return await canAccessKamar(env, user, kamarId)
+        return kamarCol ? await canAccessKamar(env, user, kamarId) : false
       }
-      const viaKelas = !!kelasId && user.kelas_ids.includes(kelasId)
-      const viaKamar = !!kamarId && user.kamar_ids.includes(kamarId)
+      const viaKelas = kelasCol ? (!!kelasId && user.kelas_ids.includes(kelasId)) : false
+      const viaKamar = kamarCol ? (!!kamarId && user.kamar_ids.includes(kamarId)) : false
       return viaKelas || viaKamar
     }
     case 'via-santri': {
@@ -65,10 +65,10 @@ export async function checkTargetScopeRule(
     case 'role-only':
       return rule.roles.includes(user.role) ? null : 'INSUFFICIENT_PERMISSIONS'
     case 'direct-kamar-kelas': {
-      const kamarCol = rule.kamarColumn ?? 'kamar_id'
-      const kelasCol = rule.kelasColumn ?? 'kelas_id'
-      const kelasId = target[kelasCol] as string | null | undefined
-      const kamarId = target[kamarCol] as string | null | undefined
+      const kamarCol = rule.kamarColumn === null ? null : (rule.kamarColumn ?? 'kamar_id')
+      const kelasCol = rule.kelasColumn === null ? null : (rule.kelasColumn ?? 'kelas_id')
+      const kelasId = kelasCol ? (target[kelasCol] as string | null | undefined) : null
+      const kamarId = kamarCol ? (target[kamarCol] as string | null | undefined) : null
       if (user.role === 'ustadz') {
         if (kelasId && !user.kelas_ids.includes(kelasId)) return 'KELAS_NOT_ASSIGNED'
         if (kamarId && !user.kamar_ids.includes(kamarId)) return 'KAMAR_NOT_ASSIGNED'
