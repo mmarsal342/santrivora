@@ -21,6 +21,11 @@ interface Kamar {
   nama: string
 }
 
+interface Kelas {
+  id: string
+  nama: string
+}
+
 const router = useRouter()
 const auth = useAuthStore()
 
@@ -56,18 +61,20 @@ function kelaminLabel(k: string) {
   return k === 'L' ? 'Laki-laki' : k === 'P' ? 'Perempuan' : k
 }
 
-// kamar sudah ke-cache (pull-only, lihat KamarListView) — dipakai buat
-// dropdown filter DAN buat resolve nama kamar per baris santri, keduanya
-// tanpa network tambahan sama sekali.
+// kelas & kamar sekarang dua-duanya ke-cache (pull-only, gelombang 1) —
+// dipakai buat dropdown filter DAN buat resolve nama per baris santri,
+// keduanya tanpa network tambahan sama sekali (dulu sort 'kelas' cuma bisa
+// ngegroup per kelas_id mentah karena kelas belum ke-cache — sekarang sudah
+// alfabetis per nama kelas beneran).
 const { allItems: kamarOptions } = useEntityList<Kamar>('kamar')
+const { allItems: kelasOptions } = useEntityList<Kelas>('kelas')
 const kamarNameById = computed(() => new Map(kamarOptions.value.map((k) => [k.id, k.nama])))
+const kelasNameById = computed(() => new Map(kelasOptions.value.map((k) => [k.id, k.nama])))
 
 // Semua filter/search/sort di bawah sengaja jadi FUNGSI LOKAL di atas cache
 // yang sudah lengkap ke-pull (bukan query param ke server lagi) — "load
-// more" jadi window paginasi lokal (lihat useEntityList), instan &jalan
-// walau offline. kelas_id BELUM bisa di-resolve jadi nama (entity kelas
-// masih menyusul di gelombang 1) — sort 'kelas' sementara ngegroup per
-// kelas_id mentah, bukan alfabetis per nama kelas.
+// more" jadi window paginasi lokal (lihat useEntityList), instan & jalan
+// walau offline.
 const {
   items: filtered,
   loading,
@@ -85,7 +92,9 @@ const {
   },
   sort: (a, b) => {
     if (sortMode.value === 'kelas') {
-      return (a.kelas_id ?? '').localeCompare(b.kelas_id ?? '') || a.nama_lengkap.localeCompare(b.nama_lengkap)
+      const namaA = kelasNameById.value.get(a.kelas_id ?? '') ?? ''
+      const namaB = kelasNameById.value.get(b.kelas_id ?? '') ?? ''
+      return namaA.localeCompare(namaB) || a.nama_lengkap.localeCompare(b.nama_lengkap)
     }
     if (sortMode.value === 'kamar') {
       const namaA = kamarNameById.value.get(a.kamar_id ?? '') ?? ''

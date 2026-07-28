@@ -28,6 +28,15 @@ export async function seedKamar(overrides: Partial<{ nama: string; jenis_kelamin
   return id
 }
 
+export async function seedKategoriPelanggaran(overrides: Partial<{ nama: string; is_active: number }> = {}) {
+  const id = uuid()
+  const nama = overrides.nama ?? `Kategori ${id.slice(0, 6)}`
+  await testEnv().DB.prepare(
+    'INSERT INTO kategori_pelanggaran (id, nama, is_active) VALUES (?, ?, ?)'
+  ).bind(id, nama, overrides.is_active ?? 1).run()
+  return id
+}
+
 export async function seedSantri(overrides: Partial<{
   nama_lengkap: string
   jenis_kelamin: 'L' | 'P'

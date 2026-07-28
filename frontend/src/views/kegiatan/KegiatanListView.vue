@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { kegiatanService, kelasService, kamarService } from '@/services'
+import { useEntityList } from '@/offline/composables/useEntityList'
+import { useEntityMutation } from '@/offline/composables/useEntityMutation'
 
 const router = useRouter()
 
@@ -24,18 +25,28 @@ interface Kegiatan {
   tanggal: string
   kelas_id?: string | null
   kamar_id?: string | null
-  kelas_nama?: string | null
-  kamar_nama?: string | null
   jadwal_kegiatan_id?: string | null
   created_by: string
+  is_active?: number
 }
 
 const auth = useAuthStore()
 
-const list = ref<Kegiatan[]>([])
-const kelasList = ref<Kelas[]>([])
-const kamarList = ref<Kamar[]>([])
-const loading = ref(false)
+// kegiatan push-eligible; kelas/kamar pull-only — semuanya dari cache Dexie.
+// kelas_nama/kamar_nama yang dulu lewat JOIN server sekarang di-resolve dari
+// cache kelas/kamar client-side (sama pola dengan SantriListView).
+const { items: list, loading } = useEntityList<Kegiatan>('kegiatan', {
+  filter: (k) => k.is_active !== 0,
+  sort: (a, b) => b.tanggal.localeCompare(a.tanggal),
+  pageSize: 1000
+})
+const { allItems: kelasList } = useEntityList<Kelas>('kelas')
+const { allItems: kamarList } = useEntityList<Kamar>('kamar')
+const kelasNameById = computed(() => new Map(kelasList.value.map((k) => [k.id, k.nama])))
+const kamarNameById = computed(() => new Map(kamarList.value.map((k) => [k.id, k.nama])))
+
+const mutation = useEntityMutation<Kegiatan>('kegiatan')
+
 const error = ref('')
 const modalOpen = ref(false)
 const editingId = ref<string | null>(null)
@@ -63,33 +74,7 @@ function canManage(k: Kegiatan) {
   return auth.isAdmin || auth.user?.id === k.created_by
 }
 
-const sortedList = computed(() => [...list.value].sort((a, b) => b.tanggal.localeCompare(a.tanggal)))
-
-async function fetchList() {
-  loading.value = true
-  error.value = ''
-  try {
-    list.value = await kegiatanService.list()
-  } catch (e: unknown) {
-    const err = e as { response?: { data?: { message?: string } } }
-    error.value = err?.response?.data?.message || 'Gagal memuat kegiatan'
-  } finally {
-    loading.value = false
-  }
-}
-
-async function fetchOptions() {
-  try {
-    kelasList.value = (await kelasService.list()) as Kelas[]
-  } catch {
-    kelasList.value = []
-  }
-  try {
-    kamarList.value = (await kamarService.list()) as Kamar[]
-  } catch {
-    kamarList.value = []
-  }
-}
+const sortedList = computed(() => list.value)
 
 function openCreate() {
   resetForm()
@@ -121,7 +106,7 @@ async function submit() {
     if (editingId.value) {
       // update: kirim null biar kelas/kamar yang dikosongkan balik jadi "Umum",
       // bukan undefined (yang artinya "jangan diubah" di backend)
-      await kegiatanService.update(editingId.value, {
+      await mutation.update(editingId.value, {
         nama: form.nama,
         jenis: form.jenis || null,
         tanggal: form.tanggal,
@@ -129,7 +114,7 @@ async function submit() {
         kamar_id: form.kamar_id || null
       })
     } else {
-      await kegiatanService.create({
+      await mutation.create({
         nama: form.nama,
         jenis: form.jenis || undefined,
         tanggal: form.tanggal,
@@ -139,7 +124,6 @@ async function submit() {
     }
     modalOpen.value = false
     resetForm()
-    await fetchList()
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || (e instanceof Error ? e.message : 'Gagal menyimpan kegiatan')
@@ -155,19 +139,13 @@ function confirmDelete(k: Kegiatan) {
 async function doDelete() {
   if (!deleteTarget.value) return
   try {
-    await kegiatanService.remove(deleteTarget.value.id)
-    list.value = list.value.filter((k) => k.id !== deleteTarget.value!.id)
+    await mutation.remove(deleteTarget.value.id)
     deleteTarget.value = null
   } catch (e: unknown) {
     const err = e as { response?: { data?: { message?: string } } }
     error.value = err?.response?.data?.message || 'Gagal menghapus kegiatan'
   }
 }
-
-onMounted(() => {
-  fetchList()
-  fetchOptions()
-})
 </script>
 
 <template>
@@ -235,9 +213,9 @@ onMounted(() => {
               <td class="hidden whitespace-nowrap px-4 py-3 text-sm text-gray-600 sm:table-cell">{{ k.jenis || '-' }}</td>
               <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-600">{{ k.tanggal }}</td>
               <td class="whitespace-nowrap px-4 py-3 text-sm text-gray-600">
-                <span v-if="k.kelas_nama" class="mr-1 inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs text-sky-700">{{ k.kelas_nama }}</span>
-                <span v-if="k.kamar_nama" class="mr-1 inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">{{ k.kamar_nama }}</span>
-                <span v-if="!k.kelas_nama && !k.kamar_nama" class="text-gray-400">Umum</span>
+                <span v-if="k.kelas_id" class="mr-1 inline-flex rounded-md bg-sky-50 px-2 py-0.5 text-xs text-sky-700">{{ kelasNameById.get(k.kelas_id) ?? '-' }}</span>
+                <span v-if="k.kamar_id" class="mr-1 inline-flex rounded-md bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">{{ kamarNameById.get(k.kamar_id) ?? '-' }}</span>
+                <span v-if="!k.kelas_id && !k.kamar_id" class="text-gray-400">Umum</span>
               </td>
               <td class="whitespace-nowrap px-4 py-3 text-right">
                 <template v-if="canManage(k)">

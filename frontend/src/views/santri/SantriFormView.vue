@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { kelasService } from '@/services'
 import { useEntityList } from '@/offline/composables/useEntityList'
 import { useEntityDetail } from '@/offline/composables/useEntityDetail'
 import { useEntityMutation } from '@/offline/composables/useEntityMutation'
@@ -36,11 +35,10 @@ const router = useRouter()
 const isEdit = computed(() => route.name === 'santri-edit')
 const editId = computed(() => (route.params.id ? String(route.params.id) : ''))
 
-const kelasOptions = ref<Kelas[]>([])
-// kamar sudah ke-cache (pull-only) — dropdown ini instan & jalan offline.
-// kelas BELUM (masih gelombang 1), jadi dropdown kelas tetap network-only
-// lewat kelasService seperti sebelumnya — batasan yang disengaja, dicatat di
-// PR, bukan kelewat.
+// kelas & kamar sekarang dua-duanya ke-cache (pull-only, gelombang 1) —
+// dropdown ini instan & jalan offline (dulu kelas masih network-only, gap
+// yang dicatat eksplisit di fase 20, sekarang ditutup).
+const { allItems: kelasOptions } = useEntityList<Kelas>('kelas')
 const { allItems: kamarOptions } = useEntityList<Kamar>('kamar')
 const submitting = ref(false)
 const serverError = ref('')
@@ -108,14 +106,6 @@ function validate() {
     valid = false
   }
   return valid
-}
-
-async function loadKelas() {
-  try {
-    kelasOptions.value = await kelasService.list()
-  } catch {
-    kelasOptions.value = []
-  }
 }
 
 // Auto-pilih kamar kalau cuma ada satu — sekali aja, pas mode create dan
@@ -192,8 +182,7 @@ async function submit() {
   }
 }
 
-onMounted(async () => {
-  await loadKelas()
+onMounted(() => {
   if (!isEdit.value) {
     form.tanggal_masuk = today
     initialLoadDone.value = true

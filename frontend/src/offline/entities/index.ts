@@ -4,3 +4,7 @@
 // schema Dexie, gak ada tempat lain yang perlu disentuh.
 import './kamar.config'
 import './santri.config'
+import './kelas.config'
+import './kegiatan.config'
+import './jadwalKegiatan.config'
+import './kategoriPelanggaran.config'
