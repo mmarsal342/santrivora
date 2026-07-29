@@ -1,16 +1,19 @@
 # SantriVora — Catatan untuk Claude Code
 
 ## Status proyek
-Proyek ini masih tahap pengembangan awal, **belum ada user asli / data production yang dipakai**. Karena itu, workflow git di bawah ini sengaja dibikin longgar untuk mempercepat iterasi.
+**Production sudah live** di https://santri.voralab.id (dideploy 2026-07-29, `wrangler deploy --env production`). Domain custom + semua binding (D1 `santrivora-db`, KV, R2, ASSETS) sudah tersambung benar di Cloudflare dashboard. Migrasi terbaru (014–018, sync engine offline-first) sudah dikonfirmasi masuk ke D1 production — dicek langsung lewat `PRAGMA table_info` untuk `kegiatan`, `perizinan_pulang`, dan `catatan_haid` (kolom `version`/`is_deleted` ada semua).
+
+Belum ada konfirmasi eksplisit ustadz/staff sudah mulai login & input data harian di produksi — tapi begitu sebuah environment sudah live di domain publik, gak ada cara pasti buat tahu KAPAN persis penggunaan asli mulai terjadi. Jadi workflow di bawah **sudah balik ke mode hati-hati mulai sekarang**, bukan menunggu sinyal itu muncul dulu.
 
 ## Workflow git
-- **Push ke branch kerja, dan merge PR ke `main`, boleh dilakukan langsung tanpa nanya konfirmasi ke user dulu** — selama perubahan sudah melalui verifikasi yang wajar (build sukses; tes manual kalau menyentuh flow kritis seperti auth/migration).
-- Force-push ke branch kerja sendiri (bukan `main`) juga boleh langsung kalau memang perlu.
-- **Pengecualian yang tetap berlaku selalu**: jangan pernah force-push ke `main`/`master` secara langsung. Kalau itu benar-benar diperlukan (misal bersihin git history yang kebocor secret), siapkan langkah-langkahnya secara rinci dan minta user yang menjalankan sendiri command force-push terakhirnya.
-- Deploy ke Cloudflare (`wrangler deploy` ke staging/production) tetap konfirmasi ke user dulu sebelum dijalankan — itu langsung berefek ke environment live, beda kelas risiko dari sekadar push/merge kode.
+- **Konfirmasi ke user dulu sebelum**: merge PR ke `main`, atau melakukan perubahan apa pun yang bisa berdampak ke data/schema di D1 production (`santrivora-db`) atau staging.
+- Push ke branch kerja sendiri (bukan `main`, belum di-merge) masih boleh langsung — itu belum menyentuh apa pun yang live.
+- **Force-push ke `main`/`master` tetap dilarang total, kapan pun** — kalau itu benar-benar diperlukan (misal bersihin git history yang kebocor secret), siapkan langkah-langkahnya secara rinci dan minta user yang menjalankan sendiri command force-push terakhirnya.
+- Deploy ke Cloudflare (`wrangler deploy` ke staging/production) **selalu** konfirmasi ke user dulu — ini gak berubah dari awal, cuma makin krusial sekarang karena production beneran live.
+- Migrasi DB baru ke staging/production juga wajib konfirmasi dulu — alasan sama: langsung mengubah schema di database yang sudah live.
 
-## ⚠️ Kapan aturan longgar ini harus berubah
-Begitu aplikasi ini mulai dipakai beneran (ada data santri/user asli, ustadz login & input data harian, dst), **balik ke default hati-hati**: konfirmasi dulu sebelum merge ke `main` atau melakukan perubahan yang berdampak ke data production. Update bagian ini begitu statusnya berubah.
+## Riwayat (konteks historis, bukan aturan aktif lagi)
+Sebelum production live, workflow ini sengaja dibikin longgar (push/merge ke `main` boleh langsung tanpa nanya, selama build sukses + tes manual untuk flow kritis) demi mempercepat iterasi selagi belum ada risiko nyata. Itu sudah tidak berlaku lagi sejak baris "Status proyek" di atas — dipertahankan di sini cuma sebagai catatan kenapa histori commit sebelum tanggal ini kelihatan longgar dibanding sekarang.
 
 ## Arsitektur singkat
 - Backend: Hono di Cloudflare Workers (`src/`), pakai D1 (SQLite) + KV + R2
