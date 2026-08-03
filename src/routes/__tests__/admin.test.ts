@@ -3,7 +3,13 @@ import { adminRoutes } from '../admin'
 import { authHeaders, seedKamar, seedUser, testEnv } from '../../../test/helpers'
 
 describe('admin.ts — POST /users/:id/approve (kelas -> kamar consolidation)', () => {
-  it('approval pertama kali WAJIB minimal 1 kamar (400 kalau kosong)', async () => {
+  // PERUBAHAN KONTRAK YANG DISENGAJA: dulu approve tanpa kamar dijawab 400
+  // KAMAR_REQUIRED. Gerbang itu dicabut karena role final belum ketahuan saat
+  // approve (register selalu bikin 'ustadz'), sehingga calon kyai/kepala_asrama
+  // terpaksa dikasih kamar palsu — padahal dua peran itu gak pakai assignment
+  // kamar. Penggantinya: penanda "akun ini efektif 0 akses" di daftar user
+  // frontend. Lihat komentar panjangnya di admin.ts approve.
+  it('approve TANPA kamar sekarang boleh (buat calon kyai/kepala_asrama), status tetap approved', async () => {
     const admin = await seedUser({ role: 'admin' })
     const pending = await seedUser({ role: 'ustadz', status: 'pending', kamar_ids: [] })
 
@@ -13,7 +19,11 @@ describe('admin.ts — POST /users/:id/approve (kelas -> kamar consolidation)', 
       body: JSON.stringify({ kamar_ids: [] })
     }, testEnv())
 
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(200)
+
+    const env = testEnv()
+    const row = await env.DB.prepare('SELECT status FROM users WHERE id = ?').bind(pending.id).first<{ status: string }>()
+    expect(row?.status).toBe('approved')
   })
 
   it('approval pertama kali sukses dengan >=1 kamar, status jadi approved', async () => {

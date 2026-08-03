@@ -74,7 +74,23 @@ export const rateLimitMiddleware = () => {
       if (path === '/api/auth/login') {
         config = { window: 60, max: 10 }
       } else if (path === '/api/auth/register') {
-        config = { window: 3600, max: 3 }
+        // Key limiter ini IP-only (lihat `key` di bawah) — dan itu memang kasar
+        // secara inheren: satu pesantren di belakang satu WiFi/NAT tampil
+        // sebagai SATU IP, jadi jatahnya dibagi seluruh gedung, bukan per orang.
+        // Email tidak bisa dipakai jadi bagian key di sini karena middleware ini
+        // jalan sebelum body divalidasi; dan kalaupun bisa, memasukkan email
+        // justru MEMBUNUH proteksinya (penyerang tinggal ganti email tiap kali).
+        //
+        // Jadi yang benar bukan mengganti key, tapi menaikkan plafonnya ke angka
+        // yang realistis untuk onboarding satu angkatan staff sekali duduk.
+        // Aman karena register cuma bikin akun `status='pending'` (auth.ts) yang
+        // TIDAK BISA APA-APA sampai admin approve — jadi biaya spam-nya cuma
+        // baris pending yang gampang diabaikan, bukan akses data.
+        //
+        // Catatan: limiter jalan SEBELUM validasi (worker.ts), jadi percobaan
+        // gagal (salah format password, email kedobelan) IKUT memotong jatah.
+        // Plafon yang lega juga yang bikin properti itu tidak lagi menyakitkan.
+        config = { window: 3600, max: 30 }
       } else if (path === '/api/auth/refresh') {
         config = { window: 60, max: 20 }
       }

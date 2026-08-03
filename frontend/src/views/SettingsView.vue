@@ -118,8 +118,8 @@ async function changePassword() {
   }
 }
 
-function logout() {
-  auth.logout()
+async function logout() {
+  await auth.logout()
   router.push({ name: 'login' })
 }
 </script>
