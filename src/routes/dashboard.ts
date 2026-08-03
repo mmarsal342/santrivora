@@ -24,7 +24,14 @@ dashboard.get('/summary', dashboardRead, async (c) => {
   const santriFilter = aj
     ? `INNER JOIN kamar k ON s.kamar_id = k.id AND k.jenis_kelamin = '${aj}'`
     : ''
-  const kamarFilter = aj ? `AND jenis_kelamin = '${aj}'` : ''
+  // WAJIB diprefix `km.` — filter ini dipakai juga di dua query yang JOIN
+  // `kamar km` dengan `santri s`, dan KEDUA tabel punya kolom `jenis_kelamin`.
+  // Tanpa prefix, SQLite nolak dengan "ambiguous column name: jenis_kelamin"
+  // dan seluruh GET /summary jadi 500 — persis kejadian di produksi: kepala
+  // asrama gagal total di halaman pertama yang dia buka, sementara admin/kyai
+  // aman karena `aj` null bikin filter ini string kosong (jadi bug-nya cuma
+  // muncul buat satu peran, itu sebabnya lolos sampai produksi).
+  const kamarFilter = aj ? `AND km.jenis_kelamin = '${aj}'` : ''
 
   const [totalSantri, totalKamar, totalPelanggaran, totalPrestasi, perKategori, perKamar, perAsrama, topPelanggar] = await Promise.all([
     c.env.DB.prepare(
@@ -32,7 +39,8 @@ dashboard.get('/summary', dashboardRead, async (c) => {
     ).first<{ count: number }>(),
 
     c.env.DB.prepare(
-      `SELECT COUNT(*) as count FROM kamar WHERE is_active = 1 ${kamarFilter}`
+      // alias `km` dipakai supaya kamarFilter yang sudah diprefix tetap valid di sini
+      `SELECT COUNT(*) as count FROM kamar km WHERE km.is_active = 1 ${kamarFilter}`
     ).first<{ count: number }>(),
 
     c.env.DB.prepare(

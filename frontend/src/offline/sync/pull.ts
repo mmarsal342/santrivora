@@ -21,6 +21,13 @@ function setSince(value: string): void {
   lastSyncAt.value = value
 }
 
+/** Buang watermark supaya pull berikutnya mulai dari EPOCH (full resync).
+ * Dipanggil dari offline/reset.ts — lihat penjelasan lengkapnya di sana. */
+export function clearSince(): void {
+  localStorage.removeItem(SINCE_KEY)
+  lastSyncAt.value = null
+}
+
 interface PullResponse {
   changes: Record<string, Record<string, unknown>[]>
   has_more: boolean

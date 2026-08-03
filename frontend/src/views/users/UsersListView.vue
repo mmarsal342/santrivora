@@ -19,6 +19,21 @@ interface User {
   asrama_jenis?: 'L' | 'P' | null
   status: 'pending' | 'approved' | 'suspended'
   assigned_kamar?: Kamar[]
+  assigned_kelas?: Array<{ id: string; nama: string; tingkatan?: string | null }>
+}
+
+/**
+ * Akun sudah aktif tapi EFEKTIF gak bisa lihat data apa pun.
+ *
+ * Cuma kena `ustadz`: scope-nya murni dari assignment kamar/kelas dia sendiri
+ * (lib/scope.ts), jadi tanpa keduanya semua daftar balik kosong — dan itu dulu
+ * gagal SENYAP, gak ada tanda apa pun di sini, yang bikin "akun aktif tapi
+ * semua layar kosong" susah dilacak. admin & kyai global-read, kepala_asrama
+ * lewat asrama_jenis — ketiganya normal tanpa kamar, jadi jangan ditandai.
+ */
+function hasNoDataAccess(u: User): boolean {
+  if (u.status !== 'approved' || u.role !== 'ustadz') return false
+  return (u.assigned_kamar?.length ?? 0) === 0 && (u.assigned_kelas?.length ?? 0) === 0
 }
 
 type TabStatus = 'pending' | 'approved' | 'suspended'
@@ -264,6 +279,16 @@ onMounted(() => {
               >
                 {{ k.nama }}
               </span>
+            </div>
+
+            <div
+              v-if="hasNoDataAccess(u)"
+              class="mt-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800"
+            >
+              <svg class="mt-0.5 h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" />
+              </svg>
+              <span>Belum punya kamar/kelas — akun aktif tapi belum bisa melihat data santri mana pun.</span>
             </div>
           </div>
 

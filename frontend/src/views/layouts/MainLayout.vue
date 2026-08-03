@@ -171,7 +171,9 @@ function closeSidebar(): void {
 }
 
 async function handleLogout(): Promise<void> {
-  auth.logout()
+  // logout() sekarang async: dia coba kirim outbox yang masih nyangkut selagi
+  // token valid, lalu bersihin cache baca. Jangan di-race sama navigasi.
+  await auth.logout()
   await router.push({ name: 'login' })
 }
 </script>

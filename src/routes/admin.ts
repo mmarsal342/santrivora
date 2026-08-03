@@ -224,13 +224,19 @@ admin.post('/users/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zVali
 
   const isFirstApproval = user.status === 'pending'
 
-  if (isFirstApproval && kamar_ids.length === 0) {
-    return c.json({
-      error: 'Bad Request',
-      code: 'KAMAR_REQUIRED',
-      message: 'Minimal 1 kamar harus diassign saat approve.'
-    } as ApiError, 400)
-  }
+  // Dulu di sini ada gerbang "approve WAJIB minimal 1 kamar" (400 KAMAR_REQUIRED).
+  // Dicabut karena gerbangnya menebak sesuatu yang belum ketahuan pada saat
+  // approve: register SELALU bikin role='ustadz' (auth.ts), jadi calon kyai /
+  // kepala_asrama pun terpaksa dikasih kamar palsu cuma buat lewat approval,
+  // baru habis itu role-nya diubah — padahal dua peran itu gak pakai assignment
+  // kamar sama sekali (kyai global-read, kepala_asrama lewat asrama_jenis, lihat
+  // lib/scope.ts).
+  //
+  // Penggantinya BUKAN "dibiarkan tanpa pengaman", tapi dipindah ke tempat yang
+  // benar: daftar user di frontend sekarang menandai akun approved yang efektif
+  // TIDAK punya akses ke data apa pun (ustadz tanpa kamar & tanpa kelas), jadi
+  // kondisi itu kelihatan alih-alih gagal senyap — yang sebelumnya bikin bug
+  // "akun aktif tapi semua layar kosong" susah dilacak.
 
   // Validate kamar exist
   if (kamar_ids.length > 0) {
@@ -303,7 +309,9 @@ admin.post('/users/:id/approve', requireAnyRole('admin', 'kepala_asrama'), zVali
   ).run()
 
   return c.json({
-    message: 'User berhasil diaktifkan dan wali kamar telah diassign.',
+    message: kamar_ids.length > 0
+      ? 'User berhasil diaktifkan dan wali kamar telah diassign.'
+      : 'User berhasil diaktifkan. Belum ada kamar yang diassign — kalau perannya ustadz, dia belum bisa melihat data santri sampai kamar/kelasnya ditentukan.',
     data: { id: userId, status: 'approved', kamar_ids }
   })
 })
