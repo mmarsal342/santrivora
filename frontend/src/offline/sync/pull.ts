@@ -4,17 +4,51 @@ import { db } from '../db'
 import { pullableEntities } from '../registry'
 
 const SINCE_KEY = 'sync_since'
-const EPOCH = '1970-01-01T00:00:00.000Z'
+// Format watermark WAJIB sama persis dengan format `updated_at` di DB, yaitu
+// keluaran SQLite `datetime('now')`: 'YYYY-MM-DD HH:MM:SS' (UTC, pakai SPASI).
+// Query pull membandingkannya sebagai STRING, jadi beda format = perbandingan
+// ngaco. Lihat penjelasan lengkapnya di processPull (src/lib/sync/engine.ts).
+const EPOCH = '1970-01-01 00:00:00'
 const PAGE_LIMIT = 200
 
+/** Watermark versi lama (ISO, mengandung 'T') yang mungkin masih tersimpan di
+ * localStorage HP staff dari sebelum perbaikan format. Dibandingkan dengan
+ * `updated_at` bergaya SQLite, nilai seperti itu SELALU menang secara string
+ * untuk hari yang sama — artinya device itu bakal terus buta terhadap data
+ * baru sampai lewat tengah malam UTC. Diperlakukan sebagai "belum pernah
+ * sync" supaya tiap device sembuh sendiri lewat satu kali resync penuh, tanpa
+ * perlu menyuruh staff clear site data satu per satu. */
+function isLegacyIsoWatermark(value: string): boolean {
+  return value.includes('T')
+}
+
 function getSince(): string {
-  return localStorage.getItem(SINCE_KEY) ?? EPOCH
+  const raw = localStorage.getItem(SINCE_KEY)
+  if (!raw || isLegacyIsoWatermark(raw)) return EPOCH
+  return raw
 }
 
 /** Reaktif — dipakai SyncStatusIndicator buat nampilin "terakhir sync
  * <waktu>". Diseed dari localStorage biar tetap kelihatan benar setelah
- * reload (bukan balik ke null). */
-export const lastSyncAt = ref<string | null>(localStorage.getItem(SINCE_KEY))
+ * reload (bukan balik ke null). Watermark format lama diabaikan di sini juga,
+ * biar labelnya gak nampilin waktu yang sebenarnya sudah tidak dipakai. */
+function seedLastSync(): string | null {
+  const raw = localStorage.getItem(SINCE_KEY)
+  return raw && !isLegacyIsoWatermark(raw) ? raw : null
+}
+
+export const lastSyncAt = ref<string | null>(seedLastSync())
+
+/**
+ * Ubah watermark ('YYYY-MM-DD HH:MM:SS', UTC) jadi Date yang benar.
+ *
+ * WAJIB lewat sini, jangan `new Date(watermark)` langsung: string tanpa 'T'
+ * dan tanpa 'Z' diperlakukan JS sebagai waktu LOKAL, padahal nilainya UTC —
+ * di WIB (UTC+7) labelnya bakal meleset 7 jam ("7 jam lalu" padahal barusan).
+ */
+export function parseSyncTimestamp(value: string): Date {
+  return new Date(value.replace(' ', 'T') + 'Z')
+}
 
 function setSince(value: string): void {
   localStorage.setItem(SINCE_KEY, value)

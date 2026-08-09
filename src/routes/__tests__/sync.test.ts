@@ -397,3 +397,56 @@ describe('sync.ts — resolve conflict tidak boleh mundurin version kalau row su
     expect(row?.version).toBe(advanced!.version)
   })
 })
+
+// REGRESI PRODUKSI (paling mahal sejauh ini): pull inkremental tidak pernah
+// mengirim data baru selama masih di hari kalender UTC yang sama.
+//
+// Sebabnya `server_time` dulu dibikin dari `new Date().toISOString()`
+// ('2026-08-09T22:24:50.000Z', pakai huruf T) sementara SEMUA jalur tulis
+// memakai `datetime('now')` ('2026-08-09 23:24:50', pakai SPASI). Query pull
+// membandingkan keduanya sebagai STRING (`updated_at > ?`), dan di posisi
+// ke-11 spasi (0x20) KALAH dari 'T' (0x54) — jadi baris yang ditulis satu jam
+// SESUDAH watermark tetap dinilai lebih tua, lalu tidak pernah terkirim.
+//
+// Seluruh tes lama lolos karena semuanya memakai `since` bertahun 2000/1970:
+// di situ perbandingan sudah selesai di digit tahun, jauh sebelum pemisah
+// tanggal ikut dibandingkan. Jadi satu-satunya cara menangkap bug ini adalah
+// memakai `server_time` HASIL PULL SEBELUMNYA sebagai `since` — persis yang
+// dilakukan client sungguhan, dan persis yang tidak pernah diuji.
+describe('sync.ts — pull inkremental pakai server_time dari pull sebelumnya (regresi format watermark)', () => {
+  it('server_time seformat dengan updated_at di DB (SQLite datetime, bukan ISO)', async () => {
+    const ustadz = await seedUser({ role: 'ustadz', kamar_ids: [await seedKamar()] })
+
+    const res = await syncRoutes.request('/pull?since=2000-01-01%2000:00:00', {
+      headers: authHeaders(ustadz.accessToken)
+    }, testEnv())
+
+    const body = await res.json() as { server_time: string }
+    expect(body.server_time).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+    expect(body.server_time).not.toContain('T')
+  })
+
+  it('santri yang dibuat SESUDAH pull pertama ikut terbawa di pull kedua', async () => {
+    const kamar = await seedKamar()
+    const ustadz = await seedUser({ role: 'ustadz', kamar_ids: [kamar] })
+
+    // Pull #1 — client menyimpan server_time ini sebagai watermark
+    const res1 = await syncRoutes.request('/pull?since=2000-01-01%2000:00:00', {
+      headers: authHeaders(ustadz.accessToken)
+    }, testEnv())
+    const body1 = await res1.json() as { server_time: string }
+    const watermark = body1.server_time
+
+    // Data baru masuk SESUDAH watermark itu diambil — ini yang dulu hilang
+    const santriBaru = await seedSantri({ kamar_id: kamar, nama_lengkap: 'Diinput Setelah Sync' })
+
+    // Pull #2 memakai watermark dari pull #1, persis seperti client sungguhan
+    const res2 = await syncRoutes.request(`/pull?since=${encodeURIComponent(watermark)}`, {
+      headers: authHeaders(ustadz.accessToken)
+    }, testEnv())
+
+    expect(res2.status).toBe(200)
+    const body2 = await res2.json() as { changes: { santri: Array<{ id: string }> } }
+    expect(body2.changes.santri.map((s) => s.id)).toContain(santriBaru)
+  })
+})

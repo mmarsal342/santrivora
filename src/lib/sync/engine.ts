@@ -527,6 +527,37 @@ export async function processPull(
   const nextCursors: Record<string, string | null> = {}
   let hasMore = false
 
+  // Watermark diambil dari DB, BUKAN dari jam Worker (`new Date()`), karena dua
+  // alasan yang dua-duanya pernah menggigit di produksi:
+  //
+  // 1. FORMAT. SEMUA jalur tulis pakai `datetime('now')` → 'YYYY-MM-DD HH:MM:SS'
+  //    (pakai SPASI), sementara `toISOString()` → 'YYYY-MM-DDTHH:MM:SS.sssZ'
+  //    (pakai huruf T). Query pull membandingkan keduanya sebagai STRING
+  //    (`updated_at > ?`), dan di posisi ke-11 spasi (0x20) KALAH dari 'T'
+  //    (0x54). Akibatnya baris yang ditulis SETELAH watermark tetap dinilai
+  //    lebih tua dan tidak pernah ikut ter-pull — selama masih di hari kalender
+  //    UTC yang sama. Efek nyatanya: data yang diinput satu staff tidak pernah
+  //    sampai ke staff lain sampai lewat tengah malam UTC (07:00 WIB).
+  //    Lolos dari semua tes karena tiap tes mulai dari `since` EPOCH, yang
+  //    tahunnya (1970) sudah kalah duluan sebelum pemisah tanggal dibandingkan.
+  // 2. SELISIH JAM antara runtime Worker dan D1 — dengan mengambil kedua sisi
+  //    dari sumber waktu yang sama, selisih itu hilang dengan sendirinya.
+  //
+  // Diambil SEBELUM query dijalankan: baris yang ditulis selagi pull berlangsung
+  // jadi lebih baru dari watermark ini, sehingga terbawa di pull BERIKUTNYA.
+  // Kalau diambil SESUDAH, baris itu masuk rentang yang dianggap "sudah
+  // terkirim" padahal query-nya sudah lewat — hilang selamanya.
+  //
+  // `-1 second` menutup celah resolusi: `datetime('now')` dipotong ke detik,
+  // jadi baris yang ditulis di detik yang SAMA dengan watermark tidak akan
+  // lolos `>`. Mundur 1 detik bikin sedikit tumpang tindih — aman, karena
+  // client menyimpannya pakai bulkPut (upsert), bukan insert.
+  const stamp = await env.DB.prepare("SELECT datetime('now','-1 second') AS t").first<{ t: string }>()
+  // Gagal ambil stempel → mundur ke EPOCH, artinya client resync penuh di
+  // putaran berikutnya. Sengaja gagal ke arah "ambil berlebih", bukan "ada yang
+  // terlewat" — kelebihan data cuma boros, kekurangan data bikin bug senyap.
+  const serverTime = stamp?.t ?? '1970-01-01 00:00:00'
+
   for (const entityType of pullableEntityTypes()) {
     const config = getEntityConfig(entityType)!
     const result = await pullEntity(env, user, config, since, cursors[entityType] ?? null, limit)
@@ -535,7 +566,7 @@ export async function processPull(
     if (result.nextCursor !== null) hasMore = true
   }
 
-  return { changes, cursors: nextCursors, has_more: hasMore, server_time: new Date().toISOString() }
+  return { changes, cursors: nextCursors, has_more: hasMore, server_time: serverTime }
 }
 
 // ============================================================
