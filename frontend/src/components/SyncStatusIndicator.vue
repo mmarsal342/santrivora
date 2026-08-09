@@ -2,6 +2,7 @@
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSyncStatus } from '@/offline/composables/useSyncStatus'
+import { parseSyncTimestamp } from '@/offline/sync/pull'
 
 const router = useRouter()
 const { isOnline, pendingCount, errorCount, conflictCount, lastSyncAt, syncing, syncNow } = useSyncStatus()
@@ -19,7 +20,10 @@ onBeforeUnmount(() => {
 
 const lastSyncLabel = computed(() => {
   if (!lastSyncAt.value) return 'Belum pernah sync'
-  const diffMs = now.value - new Date(lastSyncAt.value).getTime()
+  // parseSyncTimestamp, bukan `new Date(...)` langsung — watermark itu UTC
+  // tanpa penanda zona, jadi kalau di-parse mentah bakal dibaca sebagai waktu
+  // lokal dan meleset sebesar offset zona (7 jam di WIB).
+  const diffMs = now.value - parseSyncTimestamp(lastSyncAt.value).getTime()
   const diffMin = Math.floor(diffMs / 60_000)
   if (diffMin < 1) return 'Baru saja'
   if (diffMin < 60) return `${diffMin} menit lalu`
