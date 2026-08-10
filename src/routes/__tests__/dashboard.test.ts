@@ -97,3 +97,52 @@ describe('dashboard.ts — defaultDateRange pakai WIB, bukan UTC (audit MEDIUM #
     expect(sampai).toBe('2025-06-30')
   })
 })
+
+// REGRESI PRODUKSI: kepala asrama yang MERANGKAP wali kamar hilang dari rekap
+// per-wali-kamar. Filternya dulu `role = 'ustadz'`, padahal yang menentukan
+// seseorang wali kamar atau bukan adalah ADANYA assignment kamar aktif, bukan
+// jabatannya — dan kepala asrama memang boleh merangkap. Akibatnya di lapangan
+// ada wali kamar yang kamarnya nyata tapi tidak pernah muncul di rekap.
+// admin & kyai tetap harus dikecualikan: mereka bukan wali kamar, dan sebagian
+// masih menyimpan baris ustadz_kamar sisa alur approve lama.
+describe('dashboard.ts — rekap per-wali-kamar ditentukan assignment kamar, bukan jabatan', () => {
+  it('kepala_asrama yang merangkap wali kamar IKUT muncul di rekap', async () => {
+    const kamar = await seedKamar({ jenis_kelamin: 'P' })
+    const merangkap = await seedUser({ role: 'kepala_asrama', asrama_jenis: 'P', kamar_ids: [kamar] })
+    const admin = await seedUser({ role: 'admin' })
+
+    const res = await dashboardRoutes.request('/per-wali-kamar', { headers: authHeaders(admin.accessToken) }, testEnv())
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: Array<{ id: string }> }
+    expect(body.data.map((d) => d.id)).toContain(merangkap.id)
+  })
+
+  it('tab-nya bisa dibuka juga, bukan 404 (whitelist daftar & detail harus sinkron)', async () => {
+    const kamar = await seedKamar({ jenis_kelamin: 'P' })
+    const merangkap = await seedUser({ role: 'kepala_asrama', asrama_jenis: 'P', kamar_ids: [kamar] })
+    const admin = await seedUser({ role: 'admin' })
+
+    const res = await dashboardRoutes.request(
+      `/per-wali-kamar/${merangkap.id}/santri`,
+      { headers: authHeaders(admin.accessToken) },
+      testEnv()
+    )
+
+    expect(res.status).toBe(200)
+  })
+
+  it('admin & kyai TIDAK ikut muncul walau punya assignment kamar sisa alur lama', async () => {
+    const kamar = await seedKamar({ jenis_kelamin: 'L' })
+    const kyaiPunyaKamar = await seedUser({ role: 'kyai', kamar_ids: [kamar] })
+    const adminPunyaKamar = await seedUser({ role: 'admin', kamar_ids: [kamar] })
+    const admin = await seedUser({ role: 'admin' })
+
+    const res = await dashboardRoutes.request('/per-wali-kamar', { headers: authHeaders(admin.accessToken) }, testEnv())
+
+    const body = await res.json() as { data: Array<{ id: string }> }
+    const ids = body.data.map((d) => d.id)
+    expect(ids).not.toContain(kyaiPunyaKamar.id)
+    expect(ids).not.toContain(adminPunyaKamar.id)
+  })
+})

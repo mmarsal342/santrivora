@@ -251,7 +251,19 @@ async function computeKamarStats(env: Env, kamarIds: string[], dari: string, sam
 }
 
 // GET /api/dashboard/per-wali-kamar?dari=&sampai=
-// admin/kyai: semua ustadz. kepala_asrama: cuma ustadz yang pegang kamar di asramanya.
+// admin/kyai: semua wali kamar. kepala_asrama: cuma yang pegang kamar di asramanya.
+//
+// "Wali kamar" ditentukan oleh ADANYA assignment kamar aktif (INNER JOIN
+// ustadz_kamar), bukan oleh jabatan — karena seorang kepala asrama memang bisa
+// merangkap jadi wali kamar, dan kalau itu terjadi dia WAJIB ikut terhitung di
+// rekap ini. Dulu filternya `role = 'ustadz'` doang, jadi kepala asrama yang
+// merangkap hilang total dari rekap padahal kamarnya nyata (kejadian di
+// produksi).
+//
+// admin & kyai tetap dikecualikan lewat whitelist ini: mereka bukan wali kamar,
+// dan sebagian masih menyimpan baris ustadz_kamar sisa alur approve LAMA yang
+// dulu memaksa tiap akun diberi minimal 1 kamar (gerbang itu sudah dicabut,
+// lihat admin.ts approve) — tanpa whitelist, sampah itu ikut muncul di rekap.
 dashboard.get('/per-wali-kamar', dashboardRead, async (c) => {
   const user = c.get('user')
   const aj = user.role === 'kepala_asrama' && (user.asrama_jenis === 'L' || user.asrama_jenis === 'P') ? user.asrama_jenis : null
@@ -262,7 +274,7 @@ dashboard.get('/per-wali-kamar', dashboardRead, async (c) => {
      FROM users u
      INNER JOIN ustadz_kamar uk ON uk.user_id = u.id
      INNER JOIN kamar k ON uk.kamar_id = k.id AND k.is_active = 1
-     WHERE u.role = 'ustadz' ${aj ? `AND k.jenis_kelamin = '${aj}'` : ''}
+     WHERE u.role IN ('ustadz', 'kepala_asrama') ${aj ? `AND k.jenis_kelamin = '${aj}'` : ''}
      ORDER BY u.nama_lengkap ASC`
   ).all<{ id: string; email: string; nama_lengkap: string; status: string }>()
 
@@ -319,15 +331,18 @@ dashboard.get('/per-wali-kamar/:userId/santri', dashboardRead, async (c) => {
   const userId = c.req.param('userId')
   const { dari, sampai } = defaultDateRange(c)
 
+  // Whitelist role WAJIB sama persis dengan yang dipakai daftar per-wali-kamar
+  // di atas. Kalau di sini ketinggalan, kepala asrama yang merangkap wali kamar
+  // muncul sebagai tab di daftar tapi 404 begitu tab-nya diklik.
   const wali = await c.env.DB.prepare(
-    `SELECT id, nama_lengkap FROM users WHERE id = ? AND role = 'ustadz'`
+    `SELECT id, nama_lengkap FROM users WHERE id = ? AND role IN ('ustadz', 'kepala_asrama')`
   ).bind(userId).first<{ id: string; nama_lengkap: string }>()
 
   if (!wali) {
     return c.json({
       error: 'Not Found',
-      code: 'USTADZ_NOT_FOUND',
-      message: 'Ustadz tidak ditemukan.'
+      code: 'WALI_KAMAR_NOT_FOUND',
+      message: 'Wali kamar tidak ditemukan.'
     } as ApiError, 404)
   }
 
