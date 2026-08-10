@@ -203,13 +203,30 @@ pesan.get('/:id', async (c) => {
   return c.json({ data: { ...result, pengirim_nama: (row as any).pengirim_nama } })
 })
 
-// GET /api/pesan/recipients/list — daftar ustadz untuk dropdown pilihan penerima (kyai & admin)
+// GET /api/pesan/recipients/list — daftar calon penerima pesan langsung (kyai & admin)
+//
+// Mencakup ustadz DAN kepala_asrama. Sisi INBOX sebenarnya sudah lama benar —
+// kepala asrama menerima broadcast lewat `asrama_jenis`-nya (lihat query inbox
+// di atas), dan pesan langsung ke `penerima_id`-nya pun akan sampai. Yang bolong
+// cuma daftar ini: karena disaring `role = 'ustadz'`, kyai/admin tidak pernah
+// bisa MEMILIH kepala asrama sebagai tujuan, jadi jabatan itu praktis tidak bisa
+// dikirimi pesan langsung sama sekali.
+//
+// kyai & admin sengaja tidak masuk daftar: merekalah pengirimnya (lihat
+// requireAnyRole di POST /), jadi mengirimi diri sendiri/sesama pimpinan adalah
+// keputusan produk terpisah, bukan celah yang sedang ditambal di sini.
 pesan.get('/recipients/list', requireAnyRole('kyai', 'admin'), async (c) => {
   const rows = await c.env.DB.prepare(
+    // Label asrama diambil dari kamar yang dipegang; kalau tidak memegang kamar
+    // sama sekali (kepala asrama yang TIDAK merangkap wali kamar), jatuh ke
+    // `users.asrama_jenis` — dia tetap punya asrama, cuma bukan lewat kamar.
     `SELECT u.id, u.nama_lengkap,
-       (SELECT GROUP_CONCAT(k.jenis_kelamin, '') FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = u.id) as asrama
+       COALESCE(
+         (SELECT GROUP_CONCAT(k.jenis_kelamin, '') FROM ustadz_kamar uk JOIN kamar k ON uk.kamar_id = k.id WHERE uk.user_id = u.id),
+         u.asrama_jenis
+       ) as asrama
      FROM users u
-     WHERE u.role = 'ustadz' AND u.status = 'approved'
+     WHERE u.role IN ('ustadz', 'kepala_asrama') AND u.status = 'approved'
      ORDER BY u.nama_lengkap ASC`
   ).all<{ id: string; nama_lengkap: string; asrama: string | null }>()
 
